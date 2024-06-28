@@ -36,34 +36,29 @@ namespace MWDataMigrationApp
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
             var domainMts = _sourceContext.DomainMts.ToList();
-            //var domainMapping = new Dictionary<string, int>();
+            var domainMapping = new Dictionary<string, int>();
 
-            //foreach (var domainMt in domainMts)
-            //{
-            //    int domainId = await CreateDomainAsync(domainMt, token);
-            //    domainMapping[domainMt.DomainName] = domainId;
-            //}
-
-            var domainMapping = await GetDomainMappingsAsync();
+            foreach (var domainMt in domainMts)
+            {
+                int domainId = await CreateDomainAsync(domainMt, token);
+                domainMapping[domainMt.DomainName] = domainId;
+            }
 
             var mtProjects = _sourceContext.ProjectsMts.ToList();
 
-            var excludedProjectIds = new HashSet<long> { 10022, 10030, 10040, 10041, 10048, 10061, 10069, 10081, 10082, 10083, 10084, 10085, 10093, 10094, 10095, 10103, 10105, 10073, 10076, 10108, 10110, 10117, 10118, 10121, 10125, 10175, 10181, 10185, 10351 };
-
-            //foreach (var mtProject in mtProjects.Where(x => !excludedProjectIds.Contains(x.ProjectId.Value) && x.ProjectId.HasValue))
-                foreach (var mtProject in mtProjects.Where(x => x.ProjectId == 10149))
-                {
+            foreach (var mtProject in mtProjects)
+            {
                 var projectDomains = GetDomainsByProject(mtProject.ProjectId.Value);
                 var domainIds = projectDomains.Select(d => domainMapping[d.DomainName]).Distinct().ToList();
 
-                int projectId = 334; /*await CreateProjectAsync(mtProject, token, domainIds);*/
+                int projectId = await CreateProjectAsync(mtProject, token, domainIds);
 
                 await System.Threading.Tasks.Task.Delay(20000);
 
                 long mtProjectId = mtProject.ProjectId.Value;
 
-                //await PostTaskAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
-                //await PostMilestoneAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
+                await PostTaskAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
+                await PostMilestoneAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
                 var  deliverables = await PostDeliverableAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
 
                 await ProcessDeliverablesAsync(projectId, deliverables, token);

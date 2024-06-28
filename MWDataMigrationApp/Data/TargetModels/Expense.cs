@@ -14,6 +14,8 @@ namespace MWDataMigrationApp.Data.TargetModels
         public string? Name { get; set; }
         public double Amount { get; set; }
         public string? Type { get; set; }
+        public DateTime? Date { get; set; }
+        public string Category { get; set; }
         public int LevelId { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }

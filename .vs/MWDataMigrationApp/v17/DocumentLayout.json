@@ -11,16 +11,8 @@
       "RelativeMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|solutionrelative:mwdatamigrationapp\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|c:\\users\\lenovo\\source\\repos\\mwdatamigrationapp\\mwdatamigrationapp\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|solutionrelative:mwdatamigrationapp\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|c:\\users\\lenovo\\source\\repos\\mwdatamigrationapp\\mwdatamigrationapp\\data\\targetcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|solutionrelative:mwdatamigrationapp\\data\\targetcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|c:\\users\\lenovo\\source\\repos\\mwdatamigrationapp\\mwdatamigrationapp\\data\\sourcecontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{E045A52B-6A1D-42F2-B6A2-030755FEC9CC}|MWDataMigrationApp\\MWDataMigrationApp.csproj|solutionrelative:mwdatamigrationapp\\data\\sourcecontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
   "DocumentGroupContainers": [
@@ -29,7 +21,7 @@
       "VerticalTabListWidth": 256,
       "DocumentGroups": [
         {
-          "DockedWidth": 202,
+          "DockedWidth": 320,
           "SelectedChildIndex": 2,
           "Children": [
             {
@@ -44,9 +36,10 @@
               "RelativeDocumentMoniker": "MWDataMigrationApp\\appsettings.json",
               "ToolTip": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\appsettings.json",
               "RelativeToolTip": "MWDataMigrationApp\\appsettings.json",
-              "ViewState": "AQIAAAAAAAAAAAAAAAAAAAwAAAAMAAAA",
+              "ViewState": "AQIAAAAAAAAAAAAAAAAAAAMAAABIAAAA",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
-              "WhenOpened": "2024-06-24T10:28:40.275Z"
+              "WhenOpened": "2024-06-26T01:14:16.184Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -56,46 +49,23 @@
               "RelativeDocumentMoniker": "MWDataMigrationApp\\DataMigrationService.cs",
               "ToolTip": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\DataMigrationService.cs",
               "RelativeToolTip": "MWDataMigrationApp\\DataMigrationService.cs",
-              "ViewState": "AQIAAAAAAAAAAAAAAAAAABcAAAAJAAAA",
+              "ViewState": "AQIAAOEBAAAAAAAAAAAawO8BAAAkAAAA",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2024-06-18T08:17:01.267Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 4,
-              "Title": "SourceContext.cs",
-              "DocumentMoniker": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\Data\\SourceContext.cs",
-              "RelativeDocumentMoniker": "MWDataMigrationApp\\Data\\SourceContext.cs",
-              "ToolTip": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\Data\\SourceContext.cs",
-              "RelativeToolTip": "MWDataMigrationApp\\Data\\SourceContext.cs",
-              "ViewState": "AQIAAAcAAAAAAAAAAAAmwBoAAAAkAAAA",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2024-06-18T08:11:05.449Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 3,
+              "DocumentIndex": 2,
               "Title": "TargetContext.cs",
               "DocumentMoniker": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\Data\\TargetContext.cs",
               "RelativeDocumentMoniker": "MWDataMigrationApp\\Data\\TargetContext.cs",
               "ToolTip": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\Data\\TargetContext.cs",
               "RelativeToolTip": "MWDataMigrationApp\\Data\\TargetContext.cs",
-              "ViewState": "AQIAABUAAAAAAAAAAAAAABsAAAAAAAAA",
+              "ViewState": "AQIAAEEAAAAAAAAAAAA6wFMAAAAhAAAA",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2024-06-13T15:57:29.351Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 2,
-              "Title": "Program.cs",
-              "DocumentMoniker": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\Program.cs",
-              "RelativeDocumentMoniker": "MWDataMigrationApp\\Program.cs",
-              "ToolTip": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\Program.cs",
-              "RelativeToolTip": "MWDataMigrationApp\\Program.cs",
-              "ViewState": "AQIAAAYAAAAAAAAAAAAAAB4AAAA/AAAA",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2024-06-13T15:44:53.533Z"
+              "WhenOpened": "2024-06-13T15:57:29.351Z",
+              "EditorCaption": ""
             }
           ]
         }

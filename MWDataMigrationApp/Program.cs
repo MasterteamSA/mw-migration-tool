@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MWDataMigrationApp;
 using MWDataMigrationApp.Data;
+using MWDataMigrationApp.Data.SourceModels;
 
 class Program
 {
@@ -26,10 +27,12 @@ class Program
                 var sourceConnectionString = context.Configuration.GetConnectionString("SourceConnection");
                 var targetConnectionString = context.Configuration.GetConnectionString("TargetConnection");
 
-                services.AddDbContext<SourceContext>(options =>
-                    options.UseSqlServer(sourceConnectionString));
+                services.AddDbContext<SourceDbContext>(options =>
+                   options.UseSqlServer(sourceConnectionString));
                 services.AddDbContext<TargetContext>(options =>
                     options.UseSqlServer(targetConnectionString));
                 services.AddTransient<DataMigrationService>();
+
+                services.AddHttpClient();
             });
 }

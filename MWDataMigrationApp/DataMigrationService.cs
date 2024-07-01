@@ -6,7 +6,6 @@ using MWDataMigrationApp.Data.TargetModels;
 using MWDataMigrationApp.Models;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
-using System.Linq;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
@@ -35,36 +34,73 @@ namespace MWDataMigrationApp
 
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-            var domainMts = _sourceContext.DomainMts.ToList();
-            var domainMapping = new Dictionary<string, int>();
 
-            foreach (var domainMt in domainMts)
+            var preparedUsers = FetchAndPrepareUsers();
+
+
+            var seededUsers = await GetSeededUsersAsync(); 
+
+
+            var usersToCreate = preparedUsers.Where(user => !seededUsers.ContainsKey(user.AD_UserPrincipalName.Trim())).ToList();
+
+            List<UserInfo> createdUsersInfo = new();
+            if (usersToCreate.Any())
             {
-                int domainId = await CreateDomainAsync(domainMt, token);
-                domainMapping[domainMt.DomainName] = domainId;
+                createdUsersInfo = await CreateUsersAsync(usersToCreate);
             }
 
-            var mtProjects = _sourceContext.ProjectsMts.ToList();
+            var allRelevantUsers = seededUsers.Values.ToList();
+            allRelevantUsers.AddRange(createdUsersInfo);
 
-            foreach (var mtProject in mtProjects)
+
+            var userAccounts = _sourceContext.UsersMts.ToList();
+
+            var accountIdToEmailMap = userAccounts.ToDictionary(u => u.UserAccountId, u => u.Email);
+
+            var projectRoleMembersMts = _sourceContext.ProjectRoleMembersMts.ToList();
+
+            var domainMts = _sourceContext.DomainMts.ToList();
+            var domainMapping = await GetDomainMappingsAsync();
+
+            //string logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "domains_log.txt");
+            //using (var logWriter = new StreamWriter(logFilePath, append: true))
+            //{
+            //    foreach (var domainMt in domainMts)
+            //    {
+            //        int domainId = await CreateDomainAsync(domainMt, accountIdToEmailMap, allRelevantUsers, logWriter);
+            //        if (domainId != 0)
+            //        {
+            //            domainMapping[domainMt.DomainName] = domainId;
+            //        }
+            //    }
+            //}
+
+            var mtProjects = _sourceContext.ProjectsMts.ToList();
+            var exclud = new List<long> { 10030, 10022 };
+
+            foreach (var mtProject in mtProjects.Where(x => !exclud.Contains(x.ProjectId.Value)))
             {
                 var projectDomains = GetDomainsByProject(mtProject.ProjectId.Value);
                 var domainIds = projectDomains.Select(d => domainMapping[d.DomainName]).Distinct().ToList();
 
-                int projectId = await CreateProjectAsync(mtProject, token, domainIds);
+                var result = await CreateProjectAsync(mtProject, domainIds, userAccounts, allRelevantUsers, projectRoleMembersMts);
+
+                 LogProjectResult(result);
+
+                int projectId = result.ProjectId;
 
                 await System.Threading.Tasks.Task.Delay(20000);
 
                 long mtProjectId = mtProject.ProjectId.Value;
 
-                await PostTaskAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
-                await PostMilestoneAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
-                var  deliverables = await PostDeliverableAsync(mtProjectId, projectId, token, mtProject.StartDate.Value, mtProject.EndDate.Value);
+                await PostTaskAsync(mtProjectId, projectId, mtProject.StartDate.Value, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
+                await PostMilestoneAsync(mtProjectId, projectId, mtProject.StartDate.Value, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
+                var  deliverables = await PostDeliverableAsync(mtProjectId, projectId, mtProject.StartDate.Value, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
 
                 await ProcessDeliverablesAsync(projectId, deliverables, token);
 
-                await PostRiskAsync(mtProjectId, projectId, token, deliverables, mtProject.EndDate.Value);
-                await PostIssueAsync(mtProjectId, projectId, token, deliverables, mtProject.EndDate.Value);
+                await PostRiskAsync(mtProjectId, projectId, deliverables, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
+                await PostIssueAsync(mtProjectId, projectId, new List<DeliverableInfo>(), mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
 
                 var projectExpenses = _sourceContext.TempoExpensesMts.Where(e => e.ProjectId == mtProjectId).ToList();
                 await CreateExpensesAsync(projectId, projectExpenses);
@@ -100,39 +136,215 @@ namespace MWDataMigrationApp
             throw new Exception("Authentication failed.");
         }
 
-        private async Task<int> CreateDomainAsync(DomainMt domainMt, string token)
-        {
-            var domainUri = _configuration["ApiEndpoints:PostProgram"];
-            var propsConfig = _configuration.GetSection("ProgramProperties");
-            var requestBody = new
-            {
-                name = new { ar = domainMt.DomainName, en = domainMt.DomainName },
-                props = new List<object>
-                {
-                    CreateProp(propsConfig.GetSection("Manager"), _configuration.GetValue<string>("DefaultUserId")),
-                    CreateProp(propsConfig.GetSection("Description"), new { ar = $"<p>{domainMt.DomainName}</p>", en = $"<p>{domainMt.DomainName}</p>" })
-                },
-                levelId = _configuration.GetValue<int>("ProgramLevelId"),
-                sources = new List<int> { _configuration.GetValue<int>("ProgramSources") },
-                attachments = new List<object>(),
-                isDraft = false
-            };
 
-            var response = await _httpClient.PostAsJsonAsync(domainUri, requestBody);
+        public async Task<Dictionary<string, int>> GetDomainMappingsAsync()
+        {
+            var response = await _httpClient.GetAsync($"{_configuration["ApiEndpoints:BaseUrl"]}/charts/Levels/342/cards");
+            response.EnsureSuccessStatusCode();
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            var responseJson = JsonConvert.DeserializeObject<JObject>(responseBody);
+
+            var domainMapping = new Dictionary<string, int>();
+
+            var levels = responseJson["data"]["details"][0]["data"];
+            foreach (var level in levels)
+            {
+                var id = level["id"].Value<int>();
+                var name = level["name"].Value<string>();
+                domainMapping[name] = id;
+            }
+
+            return domainMapping;
+        }
+
+        public List<AdJiraUser> FetchAndPrepareUsers()
+        {
+            var rawUsers = _sourceContext.AdJiraUsers.ToList();
+            var preparedUsers = rawUsers.Select(user => new AdJiraUser
+            {
+                AD_DisplayName = string.IsNullOrEmpty(user.AD_DisplayName) ? user.JIRA_NAME : user.AD_DisplayName,
+                AD_UserPrincipalName = string.IsNullOrEmpty(user.AD_UserPrincipalName) ? user.JIRA_EMAIL : user.AD_UserPrincipalName,
+                AD_USER_NAME = string.IsNullOrEmpty(user.AD_USER_NAME) ? GetUsernameFromEmail(user.JIRA_EMAIL) : GetUsernameFromEmail(user.AD_UserPrincipalName),
+                JIRA_EMAIL = user.JIRA_EMAIL,
+                JIRA_NAME = user.JIRA_NAME,
+                JIRA_USER_NAME = GetUsernameFromEmail(user.JIRA_EMAIL)
+            }).ToList();
+
+            return preparedUsers.DistinctBy(x => x.AD_UserPrincipalName).ToList();
+        }
+
+        private string GetUsernameFromEmail(string email)
+        {
+            if (string.IsNullOrEmpty(email))
+                return null;
+            var atIndex = email.IndexOf('@');
+            return atIndex > 0 ? email.Substring(0, atIndex) : null;
+        }
+
+        private async Task<Dictionary<string, UserInfo>> GetSeededUsersAsync()
+        {
+            var users = new Dictionary<string, UserInfo>();
+            var response = await _httpClient.GetAsync($"{_configuration["ApiEndpoints:BaseUrl"]}/identity/Users?Query=");
             if (response.IsSuccessStatusCode)
             {
-                var responseData = await response.Content.ReadAsStringAsync();
-                using var jsonDoc = JsonDocument.Parse(responseData);
-                var root = jsonDoc.RootElement;
-
-                if (root.TryGetProperty("data", out JsonElement dataElement))
+                var content = await response.Content.ReadAsStringAsync();
+                var options = new JsonSerializerOptions
                 {
-                    return dataElement.GetInt32();
+                    PropertyNameCaseInsensitive = true
+                };
+                var apiResponse = System.Text.Json.JsonSerializer.Deserialize<ApiResponse<UserInfo>>(content, options);
+                if (apiResponse?.Data != null)
+                {
+                    foreach (var userInfo in apiResponse.Data)
+                    {
+                        users[userInfo.UserName.Trim()] = userInfo;
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine("Failed to fetch seeded users.");
+            }
+            return users;
+        }
+        private async Task<List<UserInfo>> CreateUsersAsync(List<AdJiraUser> usersToCreate)
+        {
+            var createdUsers = new List<UserInfo>();
+            var successLogFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "successful_user_passwords.txt");
+            var failedLogFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "failed_users.txt");
+
+            using (StreamWriter successWriter = new StreamWriter(successLogFilePath, true))
+            using (StreamWriter failedWriter = new StreamWriter(failedLogFilePath, true))
+            {
+                foreach (var user in usersToCreate)
+                {
+                    var randomPassword = GenerateRandomPassword();
+
+                    var jsonData = new
+                    {
+                        userName = user.AD_UserPrincipalName,
+                        displayName = user.AD_DisplayName,
+                        email = user.AD_UserPrincipalName,
+                        mobile = "9977997797",
+                        ext = "1",
+                        password = randomPassword,
+                        isExternal = true,
+                        hourRate = 0,
+                        IsEncrypted = false
+                    };
+
+                    var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:BaseUrl"]}/identity/user", jsonData);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var errorContent = await response.Content.ReadAsStringAsync();
+                        failedWriter.WriteLine($"{DateTime.Now}: Failed to create user {user.AD_UserPrincipalName} - {errorContent}");
+                    }
+                    else
+                    {
+                        string responseContent = await response.Content.ReadAsStringAsync();
+                        var userInfo = System.Text.Json.JsonSerializer.Deserialize<UserInfo>(JsonDocument.Parse(responseContent).RootElement.GetProperty("data").GetRawText());
+                        createdUsers.Add(userInfo);
+                        successWriter.WriteLine($"{DateTime.Now}: Email: {user.AD_UserPrincipalName} => Password: {randomPassword}");
+                    }
+                    await System.Threading.Tasks.Task.Delay(2000);
                 }
             }
 
-            var errorResponse = await response.Content.ReadAsStringAsync();
-            throw new Exception($"Failed to create domain: {errorResponse}");
+            return createdUsers;
+        }
+
+
+
+        private string GenerateRandomPassword(int length = 12)
+        {
+            if (length < 6)
+                throw new ArgumentException("Password length must be at least 6", nameof(length));
+
+            const string upperChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            const string lowerChars = "abcdefghijklmnopqrstuvwxyz";
+            const string digitChars = "1234567890";
+            const string specialChars = "!@#$%^&*()";
+            const string validChars = upperChars + lowerChars + digitChars + specialChars;
+
+            StringBuilder password = new StringBuilder();
+            Random random = new Random();
+
+            password.Append(upperChars[random.Next(upperChars.Length)]);
+            password.Append(lowerChars[random.Next(lowerChars.Length)]);
+            password.Append(digitChars[random.Next(digitChars.Length)]);
+            password.Append(specialChars[random.Next(specialChars.Length)]);
+
+            for (int i = 4; i < length; i++)
+            {
+                password.Append(validChars[random.Next(validChars.Length)]);
+            }
+
+            return new string(password.ToString().OrderBy(c => random.Next()).ToArray());
+        }
+
+
+        private async Task<int> CreateDomainAsync(DomainMt domainMt, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users, StreamWriter logWriter)
+        {
+            try
+            {
+                var domainUri = _configuration["ApiEndpoints:PostProgram"];
+                var propsConfig = _configuration.GetSection("ProgramProperties");
+
+                var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
+                var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
+
+                var assignedToEmail = domainMt.UserAccountId != null && accountIdToEmailMap.ContainsKey(domainMt.UserAccountId)
+                       ? accountIdToEmailMap[domainMt.UserAccountId]
+                       : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    await logWriter.WriteLineAsync($"Default user assigned for Domain: {domainMt.DomainName}");
+                }
+
+                var requestBody = new
+                {
+                    name = new { ar = domainMt.DomainName, en = domainMt.DomainName },
+                    props = new List<object>
+                {
+                    CreateProp(propsConfig.GetSection("Manager"), assignedTo),
+                    CreateProp(propsConfig.GetSection("Description"), new { ar = $"<p>{domainMt.DomainName}</p>", en = $"<p>{domainMt.DomainName}</p>" })
+                },
+                    levelId = _configuration.GetValue<int>("ProgramLevelId"),
+                    sources = new List<int> { _configuration.GetValue<int>("ProgramSources") },
+                    attachments = new List<object>(),
+                    isDraft = false
+                };
+
+                var response = await _httpClient.PostAsJsonAsync(domainUri, requestBody);
+                if (response.IsSuccessStatusCode)
+                {
+                    var responseData = await response.Content.ReadAsStringAsync();
+                    using var jsonDoc = JsonDocument.Parse(responseData);
+                    var root = jsonDoc.RootElement;
+
+                    if (root.TryGetProperty("data", out JsonElement dataElement))
+                    {
+                        await logWriter.WriteLineAsync($"Success: Domain {domainMt.DomainName} created with ID {dataElement.GetInt32()}");
+                        return dataElement.GetInt32();
+                    }
+                }
+
+                var errorResponse = await response.Content.ReadAsStringAsync();
+                await logWriter.WriteLineAsync($"Failed: Domain {domainMt.DomainName} creation failed. Error: {errorResponse}");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+
+                throw;
+            }
+           
         }
 
         private IEnumerable<DomainMt> GetDomainsByProject(long projectId)
@@ -148,34 +360,45 @@ namespace MWDataMigrationApp
                 .ToList();
         }
 
-        private async Task<int> CreateProjectAsync(ProjectsMt project, string token, List<int> domainIds)
+        private async Task<ProjectCreationResult> CreateProjectAsync(ProjectsMt project, List<int> domainIds, List<UsersMt> userAccounts, List<UserInfo> users, List<ProjectRoleMembersMt> projectRoleMembersMts)
         {
-
             var postUri = _configuration["ApiEndpoints:PostProject"];
             var propsConfig = _configuration.GetSection("ProjectProperties");
 
             var mappedBusinessLine = BusinessLineMapping.ContainsKey(project.BusninessLine.TrimEnd()) ? BusinessLineMapping[project.BusninessLine.TrimEnd()] : null;
-            var mappedCompany = CompanyMapping.ContainsKey(project.Company.TrimEnd()) ? CompanyMapping[project.Company.TrimEnd()] :null;
+            var mappedCompany = CompanyMapping.ContainsKey(project.Company.TrimEnd()) ? CompanyMapping[project.Company.TrimEnd()] : null;
 
             project.Description = string.IsNullOrEmpty(project.Description) ? "Default Description" : project.Description;
+
+            var startDate = project.StartDate.HasValue ? project.StartDate.Value.ToString("yyyy-MM-dd") : "2023-01-01"; 
+            var endDate = project.EndDate.HasValue ? project.EndDate.Value.ToString("yyyy-MM-dd") : "2024-12-28"; 
+
+            var managerUserId = GetUserIdByRole(project.ProjectId.Value, "Project Manager", projectRoleMembersMts, userAccounts, users);
+            var programDirectorUserId = GetUserIdByRole(project.ProjectId.Value, "Program Director", projectRoleMembersMts, userAccounts, users);
+            var accountManagerUserId = GetUserIdByEmail(project.AccountManager, userAccounts, users);
+
+            bool defaultManagerAdded = managerUserId == null;
+            bool defaultProgramDirectorAdded = programDirectorUserId == null;
+            bool defaultAccountManagerAdded = accountManagerUserId == null;
+
             var requestBody = new
             {
                 name = new { ar = project.Name, en = project.Name },
                 props = new List<object>
-                {
-                    CreateProp(propsConfig.GetSection("StartDate"), project.StartDate.Value.ToString("yyyy-MM-dd")),
-                    CreateProp(propsConfig.GetSection("FinishDate"), project.EndDate.Value.ToString("yyyy-MM-dd")),
-                    CreateProp(propsConfig.GetSection("Budget"), project.ProjectContractValue.Value),
-                    CreateProp(propsConfig.GetSection("Manager"), _configuration.GetValue<string>("DefaultUserId")),
-                    CreateProp(propsConfig.GetSection("ProgramDirector"), _configuration.GetValue < string >("DefaultUserId")),
-                    CreateProp(propsConfig.GetSection("ClientName"), project.Organization),
-                    CreateProp(propsConfig.GetSection("AccountManager"), _configuration.GetValue<string>("DefaultUserId")),
-                    CreateProp(propsConfig.GetSection("ProjectServices"), "Support"),
-                    CreateProp(propsConfig.GetSection("BusninessLine"), mappedBusinessLine),
-                    CreateProp(propsConfig.GetSection("Company"), mappedCompany),
-                    CreateProp(propsConfig.GetSection("PipeDriveLink"), project.PipeDriveLink),
-                    CreateProp(propsConfig.GetSection("Description"), new { ar = $"<p>{project.Description}</p>", en = $"<p>{project.Description}</p>" })
-                },
+            {
+                CreateProp(propsConfig.GetSection("StartDate"), startDate),
+                CreateProp(propsConfig.GetSection("FinishDate"), endDate),
+                CreateProp(propsConfig.GetSection("Budget"), project.ProjectContractValue.HasValue && project.ProjectContractValue > 0 ? project.ProjectContractValue.Value : "1"),
+                CreateProp(propsConfig.GetSection("Manager"), managerUserId ?? _configuration.GetValue<string>("DefaultUserId")),
+                CreateProp(propsConfig.GetSection("ProgramDirector"), programDirectorUserId ?? _configuration.GetValue<string>("DefaultUserId")),
+                CreateProp(propsConfig.GetSection("ClientName"), project.Organization),
+                CreateProp(propsConfig.GetSection("AccountManager"), accountManagerUserId),
+                CreateProp(propsConfig.GetSection("ProjectServices"), "Support"),
+                CreateProp(propsConfig.GetSection("BusninessLine"), mappedBusinessLine),
+                CreateProp(propsConfig.GetSection("Company"), mappedCompany),
+                CreateProp(propsConfig.GetSection("PipeDriveLink"), project.PipeDriveLink),
+                CreateProp(propsConfig.GetSection("Description"), new { ar = $"<p>{project.Description}</p>", en = $"<p>{project.Description}</p>" })
+            },
                 levelId = _configuration.GetValue<int>("ProjectLevelId"),
                 sources = domainIds,
                 attachments = new List<object>(),
@@ -191,14 +414,81 @@ namespace MWDataMigrationApp
 
                 if (root.TryGetProperty("data", out JsonElement dataElement))
                 {
-                    return dataElement.GetInt32();
+                    return new ProjectCreationResult
+                    {
+                        ProjectId = dataElement.GetInt32(),
+                        DefaultStartDateAdded = !project.StartDate.HasValue,
+                        DefaultEndDateAdded = !project.EndDate.HasValue,
+                        DefaultManagerAdded = defaultManagerAdded,
+                        DefaultProgramDirectorAdded = defaultProgramDirectorAdded,
+                        DefaultAccountManagerAdded = defaultAccountManagerAdded
+                    };
                 }
-                throw new Exception("Data property not found in the response.");
             }
             else
             {
                 var errorResponse = await response.Content.ReadAsStringAsync();
-                throw new Exception($"Failed to create project {project.Name}: {errorResponse}");
+                // Handle error response
+            }
+            return new ProjectCreationResult
+            {
+                ProjectId = 0,
+                DefaultStartDateAdded = !project.StartDate.HasValue,
+                DefaultEndDateAdded = !project.EndDate.HasValue,
+                DefaultManagerAdded = defaultManagerAdded,
+                DefaultProgramDirectorAdded = defaultProgramDirectorAdded,
+                DefaultAccountManagerAdded = defaultAccountManagerAdded
+            };
+        }
+        private string GetUserIdByRole(long projectId, string roleName, List<ProjectRoleMembersMt> projectRoleMembersMts, List<UsersMt> userAccounts, List<UserInfo> users)
+        {
+            var accountUserId = projectRoleMembersMts.FirstOrDefault(rm => rm.ProjectId == projectId && rm.ProjectRoleName == roleName)?.UserAccountId;
+            if (accountUserId != null)
+            {
+                var email = userAccounts.FirstOrDefault(ua => ua.UserAccountId == accountUserId)?.Email;
+                if (!string.IsNullOrEmpty(email))
+                {
+                    var userId = users.FirstOrDefault(u => u.Email == email)?.UserId;
+                    if (!string.IsNullOrEmpty(userId))
+                    {
+                        return userId;
+                    }
+                }
+            }
+
+            var fallbackAccountUserId = projectRoleMembersMts.FirstOrDefault(rm => rm.ProjectId == projectId && rm.ProjectRoleName == "Programs Managers")?.UserAccountId;
+            if (fallbackAccountUserId != null)
+            {
+                var fallbackEmail = userAccounts.FirstOrDefault(ua => ua.UserAccountId == fallbackAccountUserId)?.Email;
+                if (!string.IsNullOrEmpty(fallbackEmail))
+                {
+                    return users.FirstOrDefault(u => u.Email == fallbackEmail)?.UserId;
+                }
+            }
+            return null;
+        }
+
+        private string GetUserIdByEmail(string userName, List<UsersMt> userAccounts, List<UserInfo> users)
+        {
+            var email = userAccounts.FirstOrDefault(ua => ua.UserName == userName)?.Email;
+            if (!string.IsNullOrEmpty(email))
+            {
+                return users.FirstOrDefault(u => u.Email == email)?.UserId;
+            }
+            return null;
+        }
+
+        private void LogProjectResult(ProjectCreationResult result)
+        {
+            var logMessage = $"Project ID: {result.ProjectId}, Success: {result.ProjectId > 0}, " +
+                             $"Default Start Date Added: {result.DefaultStartDateAdded}, Default End Date Added: {result.DefaultEndDateAdded}, " +
+                             $"Default Manager Added: {result.DefaultManagerAdded}, Default Program Director Added: {result.DefaultProgramDirectorAdded}, " +
+                             $"Default Account Manager Added: {result.DefaultAccountManagerAdded}";
+            var logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "project_log.txt");
+
+            using (StreamWriter writer = new StreamWriter(logFilePath, true))
+            {
+                writer.WriteLine($"{DateTime.Now}: {logMessage}");
             }
         }
 
@@ -214,18 +504,26 @@ namespace MWDataMigrationApp
             };
         }
 
-        private async System.Threading.Tasks.Task PostTaskAsync(long mtProjectId, int projectId, string token, DateTime projectStartDate, DateTime projectFinishDate)
+        private async System.Threading.Tasks.Task PostTaskAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate,
+     Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             var taskTypeIds = new List<long> { 10007, 10008, 10064, 10111, 10113, 10114, 10117 };
             var tasks = _sourceContext.IssuesMts.Where(x => taskTypeIds.Contains(x.IssueTypeId.Value) && x.ProjectId == mtProjectId).Select(i => new
             {
+                i.IssueId,
                 Name = i.Summary,
                 Details = i.Description,
-                StartDate = i.ActualStartDate.HasValue ? i.ActualStartDate.Value.ToString("yyyy-MM-dd") : projectStartDate.ToString("yyyy-MM-dd"),
-                FinishDate = i.ActualEndDate.HasValue ? i.ActualEndDate.Value.ToString("yyyy-MM-dd") : projectFinishDate.ToString("yyyy-MM-dd"),
-                AssignedTo = i.CurrentAssigneeName,
-                Type = i.Type10074
+                ActualStartDate = i.ActualStartDate,
+                PlannedStartDate = i.PlannedStartDate,
+                ActualEndDate = i.ActualEndDate,
+                PlannedEndDate = i.PlannedEndDate,
+                AssignedToAccountId = i.CurrentAssigneeAccountId,
+                Type = i.Type10074,
+                i.IssueStatusName,
+                ParentIssueId = i.ParentIssueId
             }).ToList();
+
+            var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
 
             var taskPropsSection = _configuration.GetSection("TaskProperties:Type");
 
@@ -233,55 +531,199 @@ namespace MWDataMigrationApp
             string key = taskPropsSection.GetValue<string>("Key");
             string viewType = taskPropsSection.GetValue<string>("ViewType");
 
-            foreach (var task in tasks)
+            var parentTasks = tasks.Where(t => t.ParentIssueId == null).ToList();
+            var childTasks = tasks.Where(t => t.ParentIssueId != null).ToList();
+            var parentTaskMapping = new Dictionary<long, string>();
+
+            var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
+
+            // Load existing records from files
+            var successRecords = new List<string>(await LoadRecordsAsync("tasksSuccessRecords.txt"));
+            var failedRecords = new List<string>(await LoadRecordsAsync("tasksFailedRecords.txt"));
+            var dateFallbackRecords = new List<string>(await LoadRecordsAsync("tasksDateFallbackRecords.txt"));
+
+            // create parent tasks
+            foreach (var parentTask in parentTasks)
             {
-                var mappedType = task.Type != null && TypeMapping.ContainsKey(task.Type.TrimEnd()) ? TypeMapping[task.Type.TrimEnd()] : null;
+                var startDate = parentTask.ActualStartDate ?? parentTask.PlannedStartDate ?? projectStartDate;
+                var finishDate = parentTask.ActualEndDate ?? parentTask.PlannedEndDate ?? projectFinishDate;
+
+                if (parentTask.ActualStartDate == null || parentTask.ActualEndDate == null)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Parent Task: {parentTask.Name}, StartDate: {startDate}, FinishDate: {finishDate}");
+                }
+
+                var mappedType = parentTask.Type != null && TypeMapping.ContainsKey(parentTask.Type.TrimEnd()) ? TypeMapping[parentTask.Type.TrimEnd()] : null;
+
+                var progress = StatusProgressMapping.ContainsKey(parentTask.IssueStatusName.TrimEnd()) ? StatusProgressMapping[parentTask.IssueStatusName.TrimEnd()] : 0;
+
+                var assignedToEmail = parentTask.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(parentTask.AssignedToAccountId)
+                    ? accountIdToEmailMap[parentTask.AssignedToAccountId]
+                    : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    failedRecords.Add($"Project ID: {projectId}, Parent Task: {parentTask.Name}");
+                }
 
                 var requestBody = new
                 {
-                    name = task.Name,
-                    details = task.Details,
-                    assignedTo = _configuration.GetValue<string>("DefaultUserId"),
-                    startDate = task.StartDate,
-                    finishDate = task.FinishDate,
+                    name = parentTask.Name,
+                    details = parentTask.Details,
+                    assignedTo,
+                    startDate = startDate.ToString("yyyy-MM-dd"),
+                    finishDate = finishDate.ToString("yyyy-MM-dd"),
                     attachments = new List<object>(),
                     status = "",
+                    progress,
                     props = new List<object>
-                    {
-                        new
-                        {
-                            id = 0,
-                            propertyId,
-                            key,
-                            value = mappedType,
-                            viewType
-                        }
-                    },
+            {
+                new
+                {
+                    id = 0,
+                    propertyId,
+                    key,
+                    value = mappedType,
+                    viewType
+                }
+            },
                     type = "Task"
                 };
 
                 var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/Tasks", requestBody);
 
-                if (!response.IsSuccessStatusCode)
+                if (response.IsSuccessStatusCode)
+                {
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var options = new JsonDocumentOptions
+                    {
+                        CommentHandling = JsonCommentHandling.Skip
+                    };
+                    using (var document = JsonDocument.Parse(responseContent, options))
+                    {
+                        var data = document.RootElement.GetProperty("data");
+                        parentTaskMapping[parentTask.IssueId.Value] = data.GetProperty("guid").GetString();
+
+                        successRecords.Add($"Project ID: {projectId}, Parent Task: {parentTask.Name}");
+                    }
+                }
+                else
                 {
                     var errorResponse = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"Failed to post task: {errorResponse}");
+                    failedRecords.Add($"Project ID: {projectId}, Parent Task: {parentTask.Name}, IssueId: {parentTask.IssueId}, Error: {errorResponse}");
                 }
                 await System.Threading.Tasks.Task.Delay(3000);
             }
+
+            // create child tasks
+            foreach (var childTask in childTasks)
+            {
+                var startDate = childTask.ActualStartDate ?? childTask.PlannedStartDate ?? projectStartDate;
+                var finishDate = childTask.ActualEndDate ?? childTask.PlannedEndDate ?? projectFinishDate;
+
+                if (childTask.ActualStartDate == null || childTask.ActualEndDate == null)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Child Task: {childTask.Name}, StartDate: {startDate}, FinishDate: {finishDate}");
+                }
+
+                var mappedType = childTask.Type != null && TypeMapping.ContainsKey(childTask.Type.TrimEnd()) ? TypeMapping[childTask.Type.TrimEnd()] : null;
+
+                var progress = StatusProgressMapping.ContainsKey(childTask.IssueStatusName) ? StatusProgressMapping[childTask.IssueStatusName] : 0;
+
+                var assignedToEmail = childTask.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(childTask.AssignedToAccountId)
+                    ? accountIdToEmailMap[childTask.AssignedToAccountId]
+                    : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    failedRecords.Add($"Project ID: {projectId}, Child Task: {childTask.Name}");
+                }
+
+                var requestBody = new
+                {
+                    name = childTask.Name,
+                    details = childTask.Details,
+                    assignedTo,
+                    startDate = startDate.ToString("yyyy-MM-dd"),
+                    finishDate = finishDate.ToString("yyyy-MM-dd"),
+                    attachments = new List<object>(),
+                    status = "",
+                    progress,
+                    props = new List<object>
+            {
+                new
+                {
+                    id = 0,
+                    propertyId,
+                    key,
+                    value = mappedType,
+                    viewType
+                }
+            },
+                    type = "Task",
+                    parentGuid = parentTaskMapping.ContainsKey(childTask.ParentIssueId.Value) ? parentTaskMapping[childTask.ParentIssueId.Value] : null
+                };
+
+                var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/Tasks", requestBody);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    successRecords.Add($"Project ID: {projectId}, Child Task: {childTask.Name}");
+                }
+                else
+                {
+                    var errorResponse = await response.Content.ReadAsStringAsync();
+                    failedRecords.Add($"Project ID: {projectId}, Child Task: {childTask.Name},  IssueId: {childTask.IssueId}, Error: {errorResponse}");
+                }
+                await System.Threading.Tasks.Task.Delay(3000);
+            }
+
+            await SaveRecordsAsync("tasksSuccessRecords.txt", successRecords);
+            await SaveRecordsAsync("tasksFailedRecords.txt", failedRecords);
+            await SaveRecordsAsync("tasksDateFallbackRecords.txt", dateFallbackRecords);
         }
 
-        private async System.Threading.Tasks.Task PostMilestoneAsync(long mtProjectId, int projectId, string token, DateTime projectStartDate, DateTime projectFinishDate)
+        private async Task<IEnumerable<string>> LoadRecordsAsync(string filePath)
+        {
+            if (System.IO.File.Exists(filePath))
+            {
+                return await System.IO.File.ReadAllLinesAsync(filePath);
+            }
+            return Enumerable.Empty<string>();
+        }
+
+        private async System.Threading.Tasks.Task SaveRecordsAsync(string filePath, IEnumerable<string> records)
+        {
+            await System.IO.File.WriteAllLinesAsync(filePath, records);
+        }
+
+        private async System.Threading.Tasks.Task PostMilestoneAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate,
+    Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             var milestones = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10006 && x.ProjectId == mtProjectId).Select(i => new
             {
+                i.IssueId,
                 Name = i.Summary,
-                PlannedStartDate = i.ActualStartDate.HasValue ? i.ActualStartDate.Value.ToString("yyyy-MM-dd") : projectStartDate.ToString("yyyy-MM-dd"),
-                PlannedFinishDate = i.ActualEndDate.HasValue ? i.ActualEndDate.Value.ToString("yyyy-MM-dd") : projectFinishDate.ToString("yyyy-MM-dd"),
-                Weight = 0,
-                Status = "",
-                Type = i.Type10074
+                Details = i.Description,
+                ActualStartDate = i.ActualStartDate,
+                PlannedStartDate = i.PlannedStartDate,
+                ActualEndDate = i.ActualEndDate,
+                PlannedEndDate = i.PlannedEndDate,
+                AssignedToAccountId = i.CurrentAssigneeAccountId,
+                Type = i.Type10074,
+                i.IssueStatusName,
+                Status = ""
             }).ToList();
+
+            var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
 
             var milestonePropsSection = _configuration.GetSection("MilestoneProperties:Type");
 
@@ -289,43 +731,128 @@ namespace MWDataMigrationApp
             string key = milestonePropsSection.GetValue<string>("Key");
             string viewType = milestonePropsSection.GetValue<string>("ViewType");
 
+            var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
+
+            // Load existing records from files
+            var successRecords = new List<string>(await LoadRecordsAsync("milestonesSuccessRecords.txt"));
+            var failedRecords = new List<string>(await LoadRecordsAsync("milestonesFailedRecords.txt"));
+            var dateFallbackRecords = new List<string>(await LoadRecordsAsync("milestonesDateFallbackRecords.txt"));
+
             foreach (var milestone in milestones)
             {
+                var startDate = milestone.ActualStartDate ?? milestone.PlannedStartDate ?? projectStartDate;
+                var finishDate = milestone.ActualEndDate ?? milestone.PlannedEndDate ?? projectFinishDate;
+
+                if (milestone.ActualStartDate == null || milestone.ActualEndDate == null)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, StartDate: {startDate}, FinishDate: {finishDate}");
+                }
+
                 var mappedType = milestone.Type != null && TypeMapping.ContainsKey(milestone.Type.TrimEnd()) ? TypeMapping[milestone.Type.TrimEnd()] : null;
+
+                var progress = StatusProgressMapping.ContainsKey(milestone.IssueStatusName.TrimEnd()) ? StatusProgressMapping[milestone.IssueStatusName.TrimEnd()] : 0;
+
+                var assignedToEmail = milestone.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(milestone.AssignedToAccountId)
+                    ? accountIdToEmailMap[milestone.AssignedToAccountId]
+                    : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, AssignedTo: Added default user.");
+                }
 
                 var requestBody = new
                 {
                     name = milestone.Name,
-                    plannedStartDate = milestone.PlannedStartDate,
-                    plannedFinishDate = milestone.PlannedFinishDate,
+                    plannedStartDate = startDate.ToString("yyyy-MM-dd"),
+                    plannedFinishDate = finishDate.ToString("yyyy-MM-dd"),
                     weight = 0.00001,
                     status = milestone.Status,
                     attachments = new List<object>(),
                     props = new List<object>
-                    {
-                        new
-                        {
-                            id = 0,
-                            propertyId,
-                            key,
-                            value = mappedType,
-                            viewType,
-                        }
-                    }
+            {
+                new
+                {
+                    id = 0,
+                    propertyId,
+                    key,
+                    value = mappedType,
+                    viewType,
+                }
+            }
                 };
 
                 var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/Milestones", requestBody);
 
-                if (!response.IsSuccessStatusCode)
+                int retryCount = 3;
+                int currentRetry = 0;
+
+                while (currentRetry < retryCount)
                 {
-                    var errorResponse = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"Failed to post milestone: {errorResponse}");
+                    try
+                    {
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            var errorResponse = await response.Content.ReadAsStringAsync();
+                            failedRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, IssueId: {milestone.IssueId}, Error: {errorResponse}");
+                            break;
+                        }
+                        else
+                        {
+                            var responseContent = await response.Content.ReadAsStringAsync();
+                            var data = JsonDocument.Parse(responseContent).RootElement.GetProperty("data");
+                            var taskId = data.GetProperty("taskId").GetInt32();
+                            successRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}");
+
+                            await System.Threading.Tasks.Task.Delay(2000);
+
+                            var task = await _targetContext.Tasks.FirstOrDefaultAsync(x => x.Id == taskId);
+
+                            task.AssignedTo = assignedTo;
+                            task.Details = milestone.Details;
+                            task.Progress = progress;
+                            //task.PropertiesValues.Add(new PropertiesValue
+                            //{
+                            //    PropertyId = _configuration.GetSection("TaskProperties:Type").GetValue<int>("PropertyId"),
+                            //    Value = mappedType,
+                            //    Task = task.Id
+                            //});
+
+                            await _targetContext.SaveChangesAsync();
+                            break;
+                        }
+                    }
+                    catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx && sqlEx.Number == -2)
+                    {
+                        currentRetry++;
+                        if (currentRetry >= retryCount)
+                        {
+                            failedRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, IssueId: {milestone.IssueId}, Error: Execution Timeout after {retryCount} retries.");
+                        }
+                        else
+                        {
+                            await System.Threading.Tasks.Task.Delay(1000 * currentRetry);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failedRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, IssueId: {milestone.IssueId}, Error: {ex.Message}");
+                        break;
+                    }
                 }
-                await System.Threading.Tasks.Task.Delay(5000);
+                await System.Threading.Tasks.Task.Delay(2000);
             }
+
+            await SaveRecordsAsync("milestonesSuccessRecords.txt", successRecords);
+            await SaveRecordsAsync("milestonesFailedRecords.txt", failedRecords);
+            await SaveRecordsAsync("milestonesDateFallbackRecords.txt", dateFallbackRecords);
         }
 
-        private async System.Threading.Tasks.Task<List<DeliverableInfo>> PostDeliverableAsync(long mtProjectId, int projectId, string token, DateTime projectStartDate, DateTime projectFinishDate)
+        private async System.Threading.Tasks.Task<List<DeliverableInfo>> PostDeliverableAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             List<DeliverableInfo> deliverableDetails = new List<DeliverableInfo>();
 
@@ -333,101 +860,186 @@ namespace MWDataMigrationApp
             {
                 MtDeliverablId = i.IssueId,
                 Title = i.Summary,
-                PlannedStartDate = i.ActualStartDate.HasValue ? i.ActualStartDate.Value.ToString("yyyy-MM-dd") : projectStartDate.ToString("yyyy-MM-dd"),
-                PlannedFinishDate = i.ActualEndDate.HasValue ? i.ActualEndDate.Value.ToString("yyyy-MM-dd") : projectFinishDate.ToString("yyyy-MM-dd"),
-                ActualFinishDate = i.ActualEndDate.HasValue ? i.ActualEndDate.Value.ToString("yyyy-MM-dd") : projectFinishDate.ToString("yyyy-MM-dd"), 
+                Details = i.Description,
+                ActualStartDate = i.ActualStartDate,
+                PlannedStartDate = i.PlannedStartDate,
+                ActualEndDate = i.ActualEndDate,
+                PlannedEndDate = i.PlannedEndDate,
                 Status = "",
                 CompletionPercentage = 0,
                 EarnedValue = i.EarnedValue,
                 PaymentPlanStatus = i.PaymentPlan,
+                AssignedToAccountId = i.CurrentAssigneeAccountId,
                 Type = i.Type10074,
+                i.IssueStatusName,
                 InvoiceNumber = i.InvoiceNumber,
                 Amount = i.PlannedValue,
             }).ToList();
 
+            var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
 
             var deliverablePropsSection = _configuration.GetSection("DeliverableProperties:Type");
+
+            var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
 
             int propertyId = deliverablePropsSection.GetValue<int>("PropertyId");
             string key = deliverablePropsSection.GetValue<string>("Key");
             string viewType = deliverablePropsSection.GetValue<string>("ViewType");
 
+            // Load existing records from files
+            var successRecords = new List<string>(await LoadRecordsAsync("deliverablesSuccessRecords.txt"));
+            var failedRecords = new List<string>(await LoadRecordsAsync("deliverablesFailedRecords.txt"));
+            var dateFallbackRecords = new List<string>(await LoadRecordsAsync("deliverablesDateFallbackRecords.txt"));
 
             foreach (var deliverable in deliverables)
             {
+                var plannedStartDate = deliverable.PlannedStartDate ?? projectStartDate;
+                var plannedFinishDate = deliverable.PlannedEndDate ?? projectFinishDate;
+                var actualFinishDate = deliverable.ActualEndDate ?? deliverable.PlannedEndDate ?? projectFinishDate;
+
+                if (deliverable.PlannedStartDate == null || deliverable.PlannedEndDate == null || deliverable.ActualEndDate == null)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, Deliverable ID: {deliverable.MtDeliverablId},  PlannedStartDate: {plannedStartDate}, PlannedEndDate: {plannedFinishDate}, ActualEndDate: {actualFinishDate}");
+                }
+
                 var mappedType = deliverable.Type != null && TypeMapping.ContainsKey(deliverable.Type.TrimEnd()) ? TypeMapping[deliverable.Type.TrimEnd()] : null;
+
+                var progress = StatusProgressMapping.ContainsKey(deliverable.IssueStatusName.TrimEnd()) ? StatusProgressMapping[deliverable.IssueStatusName.TrimEnd()] : 0;
+
+                var assignedToEmail = deliverable.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(deliverable.AssignedToAccountId)
+                    ? accountIdToEmailMap[deliverable.AssignedToAccountId]
+                    : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {deliverable.Title}, Deliverable ID: {deliverable.MtDeliverablId}, AssignedTo: Added default user.");
+                }
 
                 var requestBody = new
                 {
                     title = deliverable.Title,
-                    plannedStartDate = deliverable.PlannedStartDate,
-                    plannedFinishDate = deliverable.PlannedFinishDate,
-                    actualFinishDate = deliverable.ActualFinishDate,
+                    plannedStartDate = plannedStartDate.ToString("yyyy-MM-dd"),
+                    plannedFinishDate = plannedFinishDate.ToString("yyyy-MM-dd"),
+                    actualFinishDate = actualFinishDate.ToString("yyyy-MM-dd"),
                     status = deliverable.Status,
-                    completionPercentage = deliverable.CompletionPercentage,
+                    completionPercentage = progress,
                     attachments = new List<object>(),
                     props = new List<object>
-                    {
-                        new
-                        {
-                            id = 0,
-                            propertyId,
-                            key,
-                            value = mappedType,
-                            viewType,
-                        }
-                    }
+            {
+                new
+                {
+                    id = 0,
+                    propertyId,
+                    key,
+                    value = mappedType,
+                    viewType,
+                }
+            }
                 };
 
                 var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/Deliverables", requestBody);
 
-                if (response.IsSuccessStatusCode)
+                int retryCount = 3;
+                int currentRetry = 0;
+
+                while (currentRetry < retryCount)
                 {
-
-                    var responseContent = await response.Content.ReadAsStringAsync();
-                    using var jsonDoc = JsonDocument.Parse(responseContent);
-                    var root = jsonDoc.RootElement;
-
-                    if (root.TryGetProperty("data", out JsonElement dataElement))
+                    try
                     {
-                        deliverableDetails.Add(new DeliverableInfo
+                        if (response.IsSuccessStatusCode)
                         {
-                            MtDeliverablId = deliverable.MtDeliverablId.Value,
-                            Id = dataElement.GetProperty("id").GetInt32(),
-                            Title = dataElement.GetProperty("title").GetString(),
-                            PlannedFinishDate = DateTime.Parse(deliverable.PlannedFinishDate),
-                            EarnedValue = deliverable.EarnedValue,
-                            PaymentPlanStatus = deliverable.PaymentPlanStatus,
-                            Amount = deliverable.Amount,
-                            InvoiceNumber = deliverable.InvoiceNumber,
-                        });
+                            var responseContent = await response.Content.ReadAsStringAsync();
+                            using var jsonDoc = JsonDocument.Parse(responseContent);
+                            var root = jsonDoc.RootElement;
+
+                            if (root.TryGetProperty("data", out JsonElement dataElement))
+                            {
+                                successRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}");
+                                deliverableDetails.Add(new DeliverableInfo
+                                {
+                                    MtDeliverablId = deliverable.MtDeliverablId.Value,
+                                    Id = dataElement.GetProperty("id").GetInt32(),
+                                    Title = dataElement.GetProperty("title").GetString(),
+                                    PlannedFinishDate = DateTime.Parse(plannedFinishDate.ToString("yyyy-MM-dd")),
+                                    EarnedValue = deliverable.EarnedValue,
+                                    PaymentPlanStatus = deliverable.PaymentPlanStatus,
+                                    Amount = deliverable.Amount,
+                                    InvoiceNumber = deliverable.InvoiceNumber,
+                                });
+
+                                var taskId = dataElement.GetProperty("taskId").GetInt32();
+
+                                await System.Threading.Tasks.Task.Delay(2000);
+
+                                var task = await _targetContext.Tasks.FirstOrDefaultAsync(x => x.Id == taskId);
+                                task.AssignedTo = assignedTo;
+                                task.Details = deliverable.Details;
+                                task.Progress = progress;
+                                //task.PropertiesValues.Add(new PropertiesValue
+                                //{
+                                //    PropertyId = _configuration.GetSection("TaskProperties:Type").GetValue<int>("PropertyId"),
+                                //    Value = mappedType,
+                                //    Task = task.Id
+                                //});
+                                await _targetContext.SaveChangesAsync();
+                            }
+                            break;
+                        }
+                        else
+                        {
+                            var errorResponse = await response.Content.ReadAsStringAsync();
+                            failedRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, IssueId: {deliverable.MtDeliverablId}, Error: {errorResponse}");
+                            break;
+                        }
+                    }
+                    catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx && sqlEx.Number == -2)
+                    {
+                        currentRetry++;
+                        if (currentRetry >= retryCount)
+                        {
+                            failedRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, IssueId: {deliverable.MtDeliverablId}, Error: Execution Timeout after {retryCount} retries.");
+                        }
+                        else
+                        {
+                            await System.Threading.Tasks.Task.Delay(1000 * currentRetry); // Exponential backoff
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failedRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, IssueId: {deliverable.MtDeliverablId}, Error: {ex.Message}");
+                        break; // No need to retry on other exceptions
                     }
                 }
-                else
-                {
-                    var errorResponse = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"Failed to post deliverable: {errorResponse}");
-                }
-                await System.Threading.Tasks.Task.Delay(3000);
+                await System.Threading.Tasks.Task.Delay(2000);
             }
+
+            await SaveRecordsAsync("deliverablesSuccessRecords.txt", successRecords);
+            await SaveRecordsAsync("deliverablesFailedRecords.txt", failedRecords);
+            await SaveRecordsAsync("deliverablesDateFallbackRecords.txt", dateFallbackRecords);
 
             return deliverableDetails;
         }
 
-        private async System.Threading.Tasks.Task PostRiskAsync(long mtProjectId, int projectId, string token, List<DeliverableInfo> deliverableInfos, DateTime projectFinishDate)
+        private async System.Threading.Tasks.Task PostRiskAsync(long mtProjectId, int projectId, List<DeliverableInfo> deliverableInfos, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             var risks = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10078 && x.ProjectId == mtProjectId).Select(i => new
             {
+                i.IssueId,
                 Title = new { ar = i.Summary, en = i.Summary },
                 Details = i.Description,
                 Category = "Project", 
                 Impact = i.Priority,
                 Probability = i.Priority, 
                 MitigationPlan = "",
-                AssignedTo = i.CurrentAssigneeName,
-                DueDate = i.DueDate.HasValue ? i.DueDate.Value.ToString("yyyy-MM-dd") : projectFinishDate.ToString("yyyy-MM-dd"),
+                AssignedToAccountId = i.CurrentAssigneeAccountId,
+                DueDate = i.DueDate,
                 i.ParentIssueId,
             }).ToList();
+
 
 
             var riskPropsSection = _configuration.GetSection("RiskProperties:RelatedDeliverables");
@@ -436,10 +1048,37 @@ namespace MWDataMigrationApp
             string key = riskPropsSection.GetValue<string>("Key");
             string valueType = riskPropsSection.GetValue<string>("ValueType");
             string label = riskPropsSection.GetValue<string>("Label");
+            var successRecords = new List<string>();
+            var failedRecords = new List<string>();
+            var dateFallbackRecords = new List<string>();
+            var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
+
+            var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
 
             foreach (var risk in risks)
             {
                 var relatedDeliverable = deliverableInfos.FirstOrDefault(x => x.MtDeliverablId == risk.ParentIssueId);
+
+                var dueDate = risk.DueDate ?? projectFinishDate;
+
+                if (risk.DueDate == null)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Risk: {risk.Title}, Issue ID: {risk.IssueId},  DueDate: {dueDate}");
+                }
+
+                var assignedToEmail = risk.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(risk.AssignedToAccountId)
+                    ? accountIdToEmailMap[risk.AssignedToAccountId]
+                    : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Risk: {risk.Title}, Issue ID: {risk.IssueId},   AssignedTo: Added default user.");
+                }
+
 
                 var props = relatedDeliverable != null ? new List<object>
                 {
@@ -464,7 +1103,7 @@ namespace MWDataMigrationApp
                     probability = risk.Probability,
                     mitigationPlan = risk.MitigationPlan,
                     assignedTo = _configuration.GetValue<string>("DefaultUserId"),
-                    dueDate = risk.DueDate,
+                    dueDate = risk.DueDate.Value.ToString("yyyy-MM-dd"),
                     attachments = new List<object>(),
                     props
                 };
@@ -474,24 +1113,34 @@ namespace MWDataMigrationApp
                 if (!response.IsSuccessStatusCode)
                 {
                     var errorResponse = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"Failed to post risk: {errorResponse}");
+                    failedRecords.Add($"Project ID: {projectId}, Risk: {risk.Title}, IssueId: {risk.IssueId}, Error: {errorResponse}");
+                }
+                else
+                {
+                    successRecords.Add($"Project ID: {projectId}, Risk: {risk.Title}");
                 }
 
-                await System.Threading.Tasks.Task.Delay(3000);
+                await System.Threading.Tasks.Task.Delay(2000);
             }
+
+
+            await System.IO.File.WriteAllLinesAsync("risksSuccessRecords.txt", successRecords);
+            await System.IO.File.WriteAllLinesAsync("risksFailedRecords.txt", failedRecords);
+            await System.IO.File.WriteAllLinesAsync("risksDateFallbackRecords.txt", dateFallbackRecords);
         }
 
-        private async System.Threading.Tasks.Task PostIssueAsync(long mtProjectId, int projectId, string token, List<DeliverableInfo> deliverableInfos, DateTime projectFinishDate)
+        private async System.Threading.Tasks.Task PostIssueAsync(long mtProjectId, int projectId, List<DeliverableInfo> deliverableInfos, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             var issues = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10009 && x.ProjectId == mtProjectId).Select(i => new
             {
+                i.IssueId,
                 Title = new { ar = i.Summary, en = i.Summary },
                 Details = i.Description,
                 Category = "",
                 Impact = i.Priority,
                 ResolutionPlan = "",
-                AssignedTo = i.CurrentAssigneeName,
-                DueDate = i.DueDate.HasValue ? i.DueDate.Value.ToString("yyyy-MM-dd") : projectFinishDate.ToString("yyyy-MM-dd"),
+                AssignedToAccountId = i.CurrentAssigneeAccountId,
+                DueDate = i.DueDate,
                 i.ParentIssueId
             }).ToList();
 
@@ -502,22 +1151,50 @@ namespace MWDataMigrationApp
             string valueType = issuePropsSection.GetValue<string>("ValueType");
             string label = issuePropsSection.GetValue<string>("Label");
 
+            // Load existing records from files
+            var successRecords = new List<string>(await LoadRecordsAsync("issuesSuccessRecords.txt"));
+            var failedRecords = new List<string>(await LoadRecordsAsync("issuesFailedRecords.txt"));
+            var dateFallbackRecords = new List<string>(await LoadRecordsAsync("issuesDateFallbackRecords.txt"));
+
+            var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
+            var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
+
             foreach (var issue in issues)
             {
+                var dueDate = issue.DueDate ?? projectFinishDate;
+
+                if (issue.DueDate == null)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}, Issue ID: {issue.IssueId}, DueDate: {dueDate}");
+                }
+
+                var assignedToEmail = issue.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(issue.AssignedToAccountId)
+                    ? accountIdToEmailMap[issue.AssignedToAccountId]
+                    : null;
+
+                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                    ? userEmailToIdMap[assignedToEmail]
+                    : defaultUserId;
+
+                if (assignedTo == defaultUserId)
+                {
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}, Issue ID: {issue.IssueId}, AssignedTo: Added default user.");
+                }
+
                 var relatedDeliverable = deliverableInfos.FirstOrDefault(x => x.MtDeliverablId == issue.ParentIssueId);
 
                 var props = relatedDeliverable != null ? new List<object>
-                {
-                    new
-                    {
-                        id = 0,
-                        propertyId,
-                        key,
-                        value = relatedDeliverable.Id.ToString(),
-                        viewType = valueType,
-                        label
-                    }
-                } : new List<object>();
+        {
+            new
+            {
+                id = 0,
+                propertyId,
+                key,
+                value = relatedDeliverable.Id.ToString(),
+                viewType = valueType,
+                label
+            }
+        } : new List<object>();
 
                 var requestBody = new
                 {
@@ -526,8 +1203,8 @@ namespace MWDataMigrationApp
                     category = issue.Category,
                     impact = issue.Impact,
                     resolutionPlan = issue.ResolutionPlan,
-                    assignedTo = _configuration.GetValue<string>("DefaultUserId"),
-                    dueDate = issue.DueDate,
+                    assignedTo,
+                    dueDate = dueDate.ToString("yyyy-MM-dd"),
                     attachments = new List<object>(),
                     props,
                 };
@@ -537,12 +1214,21 @@ namespace MWDataMigrationApp
                 if (!response.IsSuccessStatusCode)
                 {
                     var errorResponse = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"Failed to post issue: {errorResponse}");
+                    failedRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}, Issue ID: {issue.IssueId}, Error: {errorResponse}");
+                }
+                else
+                {
+                    successRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}");
                 }
 
-                await System.Threading.Tasks.Task.Delay(3000);
+                await System.Threading.Tasks.Task.Delay(2000);
             }
+
+            await SaveRecordsAsync("issuesSuccessRecords.txt", successRecords);
+            await SaveRecordsAsync("issuesFailedRecords.txt", failedRecords);
+            await SaveRecordsAsync("issuesDateFallbackRecords.txt", dateFallbackRecords);
         }
+
 
         private async Task<int> FetchPaymentPlanIdAsync(int projectId, string token)
         {
@@ -569,45 +1255,6 @@ namespace MWDataMigrationApp
             }
         }
 
-        private async Task<Dictionary<string, int>> GetDomains(int parentId)
-        {
-            var levels = await _targetContext.LevelsData.Where(x => x.ParentId == parentId).ToListAsync();
-            return levels.ToDictionary(x => x.Name, x => x.Id);
-        }
-
-        public async Task<Dictionary<string, int>> GetDomainMappingsAsync()
-        {
-            var response = await _httpClient.GetAsync($"{_configuration["ApiEndpoints:BaseUrl"]}/charts/Levels/288/cards");
-            response.EnsureSuccessStatusCode();
-
-            var responseBody = await response.Content.ReadAsStringAsync();
-            var responseJson = JsonConvert.DeserializeObject<JObject>(responseBody);
-
-            var domainMapping = new Dictionary<string, int>();
-
-            var levels = responseJson["data"]["details"][0]["data"];
-            foreach (var level in levels)
-            {
-                var id = level["id"].Value<int>();
-                var name = level["name"].Value<string>();
-                domainMapping[name] = id;
-            }
-
-            return domainMapping;
-        }
-        private async Task<HttpResponseMessage> ExecuteApiRequestAsync(string url, HttpMethod method, string token, object data = null)
-        {
-            var request = new HttpRequestMessage(method, url);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            if (data != null)
-            {
-                request.Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(data), Encoding.UTF8, "application/json");
-            }
-
-            return await _httpClient.SendAsync(request);
-        }
-
         public async System.Threading.Tasks.Task ProcessDeliverablesAsync(int projectId, List<DeliverableInfo> deliverables, string token)
         {
             var paymentPlanId = await FetchPaymentPlanIdAsync(projectId, token);
@@ -617,19 +1264,36 @@ namespace MWDataMigrationApp
                 return;
             }
 
+            var invoiceNumberCounts = new Dictionary<string, int>();
+            foreach (var deliverable in deliverables)
+            {
+                if (!string.IsNullOrEmpty(deliverable.InvoiceNumber))
+                {
+                    if (!invoiceNumberCounts.ContainsKey(deliverable.InvoiceNumber))
+                    {
+                        invoiceNumberCounts[deliverable.InvoiceNumber] = 0;
+                    }
+                    invoiceNumberCounts[deliverable.InvoiceNumber]++;
+                    if (invoiceNumberCounts[deliverable.InvoiceNumber] > 1)
+                    {
+                        deliverable.InvoiceNumber += $"-Shared {invoiceNumberCounts[deliverable.InvoiceNumber]}";
+                    }
+                }
+            }
+
             foreach (var deliverable in deliverables.Where(d => d.Amount.HasValue && d.Amount != 0))
             {
                 await CreateBoqAsync(projectId, deliverable);
                 await CreatePaymentPlanItemAsync(projectId, paymentPlanId, deliverable);
             }
 
-            bool shouldSubmitPaymentPlan = deliverables.Any(d => d.PaymentPlanStatus == "Final" || d.PaymentPlanStatus == "Planned");
-            if (shouldSubmitPaymentPlan)
+            bool shouldSubmitPaymentPlan = deliverables.Any(d => d.PaymentPlanStatus == "Tentative");
+            if (!shouldSubmitPaymentPlan)
             {
                 var paymentPlanItems = await FetchPaymentPlanItemsAsync(projectId, paymentPlanId);
                 await SubmitPaymentPlanAsync(projectId, paymentPlanId, paymentPlanItems);
 
-                foreach (var deliverable in deliverables)
+                foreach (var deliverable in deliverables.Where(x => !string.IsNullOrEmpty(x.InvoiceNumber)))
                 {
                     var paymentPlanItem = paymentPlanItems.FirstOrDefault(item => item.Deliverables.Contains(deliverable.Id));
                     if (paymentPlanItem != null && deliverable.EarnedValue.HasValue && deliverable.EarnedValue != 0)
@@ -640,6 +1304,7 @@ namespace MWDataMigrationApp
                 }
             }
         }
+
 
         private async System.Threading.Tasks.Task CreateBoqAsync(int projectId, DeliverableInfo deliverable)
         {
@@ -748,7 +1413,7 @@ namespace MWDataMigrationApp
         {
             var requestBody = new
             {
-                InvoiceNumber = deliverable.InvoiceNumber ?? deliverable.BoqId.ToString() ,
+                deliverable.InvoiceNumber,
                 Amount = deliverable.EarnedValue.Value,
                 Attachments = new List<object>(),
                 PaymentPlanItemId = paymentPlanItemId
@@ -844,6 +1509,36 @@ namespace MWDataMigrationApp
             { "Jadaya", "Jadaya" },
             { "Master Team", "Master_Team" },
             { "MW", "MW" }
+        };
+
+        private static readonly Dictionary<string, int> StatusProgressMapping = new Dictionary<string, int>
+        {
+            { "To Do", 5 },
+            { "Open", 5 },
+            { "Pre-kick off", 5 },
+            { "Project Preparation", 5 },
+            { "Team allocation", 5 },
+            { "Kick-off", 10 },
+            { "Configuration", 10 },
+            { "Installation and Configuration", 10 },
+            { "Business analysis", 20 },
+            { "Under Analysis", 20 },
+            { "Under Design", 30 },
+            { "Design", 30 },
+            { "Under Development", 50 },
+            { "Development", 50 },
+            { "In Progress", 50 },
+            { "License Submission", 70 },
+            { "UAT", 80 },
+            { "Under Review", 80 },
+            { "PMO Approval", 90 },
+            { "Client approval", 90 },
+            { "Awaiting response", 90 },
+            { "Deployment", 100 },
+            { "Done", 100 },
+            { "Deployed", 100 },
+            { "On Hold", 0 },
+            { "Kick off", 10 }
         };
     }
 }

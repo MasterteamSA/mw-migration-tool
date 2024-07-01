@@ -32,6 +32,7 @@ namespace MWDataMigrationApp.Data.SourceModels
             }
         }
 
+        public DbSet<AdJiraUser> AdJiraUsers { get; set; }
         public virtual DbSet<DomainMt> DomainMts { get; set; }
         public virtual DbSet<IssuesMt> IssuesMts { get; set; }
         public virtual DbSet<ProjectDomainMt> ProjectDomainMts { get; set; }
@@ -43,6 +44,18 @@ namespace MWDataMigrationApp.Data.SourceModels
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
+
+            modelBuilder.Entity<AdJiraUser>().ToTable("AD_JIRA_USERS_MT");
+
+
+
+            modelBuilder.Entity<AdJiraUser>(entity =>
+            {
+                entity.HasNoKey();
+
+                entity.ToTable("AD_JIRA_USERS_MT", "jir");
+            });
+
             modelBuilder.Entity<DomainMt>(entity =>
             {
                 entity.HasNoKey();
@@ -59,6 +72,8 @@ namespace MWDataMigrationApp.Data.SourceModels
 
                 entity.Property(e => e.UserAccountId).HasColumnName("USER_ACCOUNT_ID");
             });
+
+
 
             modelBuilder.Entity<IssuesMt>(entity =>
             {

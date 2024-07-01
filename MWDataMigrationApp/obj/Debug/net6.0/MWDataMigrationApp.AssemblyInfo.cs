@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MWDataMigrationApp")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bda28c93ef502489d4375e60b3ea311882f810bf")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bb504b5087c0b2eb2b2f7987e56b28fe6919e4c7")]
 [assembly: System.Reflection.AssemblyProductAttribute("MWDataMigrationApp")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MWDataMigrationApp")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

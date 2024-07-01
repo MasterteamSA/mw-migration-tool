@@ -19,7 +19,7 @@ namespace MWDataMigrationApp
         private readonly TargetContext _targetContext;
         private readonly IConfiguration _configuration;
         private readonly HttpClient _httpClient;
-
+        private readonly Dictionary<long,int> ProjectMappingDic = new Dictionary<long,int>();
         public DataMigrationService(SourceDbContext sourceContext, TargetContext targetContext, IConfiguration configuration, HttpClient httpClient)
         {
             _sourceContext = sourceContext;
@@ -89,10 +89,8 @@ namespace MWDataMigrationApp
 
                 int projectId = result.ProjectId;
 
-                await System.Threading.Tasks.Task.Delay(20000);
-
                 long mtProjectId = mtProject.ProjectId.Value;
-
+                ProjectMappingDic.Add((\mtProjectId,projectId));
                 await PostTaskAsync(mtProjectId, projectId, mtProject.StartDate.Value, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
                 await PostMilestoneAsync(mtProjectId, projectId, mtProject.StartDate.Value, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);
                 var  deliverables = await PostDeliverableAsync(mtProjectId, projectId, mtProject.StartDate.Value, mtProject.EndDate.Value, accountIdToEmailMap, allRelevantUsers);

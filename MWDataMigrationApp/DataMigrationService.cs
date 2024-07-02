@@ -75,12 +75,12 @@ namespace MWDataMigrationApp
                 try
                 {
                     var result = await CreateProjectAsync(mtProject, domainIds, userAccounts, allRelevantUsers, projectRoleMembersMts);
-                    await System.Threading.Tasks.Task.Delay(1500);
+                    await System.Threading.Tasks.Task.Delay(1000);
                     result.MtProjectId = mtProject.ProjectId.Value;
                     LogProjectResult(result);
                     int projectId = result.ProjectId;
                     long mtProjectId = mtProject.ProjectId.Value;
-                    ProjectMappingDic.Add(mtProjectId, (projectId, mtProject.StartDate, mtProject.EndDate));
+                    ProjectMappingDic.Add(mtProjectId, (projectId, result.St, result.En));
                     
                 }
                 catch (Exception ex)
@@ -90,19 +90,41 @@ namespace MWDataMigrationApp
 
                  
             }
-            PopuldateDicWithValues();
-            LogProjectJsonResult();
             var t_result = new List<Data.TargetModels.Task>();
-        
+            var m_result = new List<Data.TargetModels.Milestone>();
+
             foreach (var pro in ProjectMappingDic)
             {
                 try
                 {
-                    var result = await PostTask(pro.Key, pro.Value.proId, pro.Value.st.Value, pro.Value.end.Value, accountIdToEmailMap, allRelevantUsers);
-                    if (result != null)
-                    {
-                        t_result.AddRange(result);
-                    }
+                    //var postTasksResult = await PostTask(pro.Key, pro.Value.proId, pro.Value.st.Value, pro.Value.end.Value, accountIdToEmailMap, allRelevantUsers);
+                    //if (postTasksResult != null)
+                    //{
+                    //    t_result.AddRange(postTasksResult);
+                    //}
+
+                    //var postMilestonesResult = await PostMilestoneAsync(pro.Key, pro.Value.proId, pro.Value.st.Value, pro.Value.end.Value, accountIdToEmailMap, allRelevantUsers);
+                    //if (postMilestonesResult != null)
+                    //{
+                    //    m_result.AddRange(postMilestonesResult);
+                    //}
+
+                    //var postDeliverablesResult = await PostDeliverableAsync(pro.Key, pro.Value.proId, pro.Value.st.Value, pro.Value.end.Value, accountIdToEmailMap, allRelevantUsers);
+                    //if (postDeliverablesResult != null)
+                    //{
+                    //    await ProcessDeliverablesAsync(pro.Value.proId, postDeliverablesResult, token);
+                    //}
+
+
+                    //await PostRiskAsync(pro.Key, pro.Value.proId, postDeliverablesResult, pro.Value.end.Value, accountIdToEmailMap, allRelevantUsers);
+                    await PostIssueAsync(/*pro.Key*/, 1360 /*pro.Value.proId*/, new List<Deliverable>() /*postDeliverablesResult*/, pro.Value.end.Value, accountIdToEmailMap, allRelevantUsers);
+
+                    //postDeliverablesResult.Clear();
+
+                    //var projectExpenses = _sourceContext.TempoExpensesMts.Where(e => e.ProjectId == pro.Key).ToList();
+
+                    //await CreateExpensesAsync(pro.Value.proId, projectExpenses);
+
                 }
                 catch (Exception e)
                 {
@@ -112,8 +134,11 @@ namespace MWDataMigrationApp
                
             }
 
-            _targetContext.Tasks.AddRange(t_result);
-            _targetContext.SaveChanges();
+            //_targetContext.Tasks.AddRange(t_result);
+            //_targetContext.SaveChanges();
+
+            //_targetContext.Milestones.AddRange(m_result);
+            //_targetContext.SaveChanges();
         }
 
         public  void PopuldateDicWithValues()
@@ -449,14 +474,15 @@ namespace MWDataMigrationApp
                         DefaultEndDateAdded = !project.EndDate.HasValue,
                         DefaultManagerAdded = defaultManagerAdded,
                         DefaultProgramDirectorAdded = defaultProgramDirectorAdded,
-                        DefaultAccountManagerAdded = defaultAccountManagerAdded
+                        DefaultAccountManagerAdded = defaultAccountManagerAdded,
+                        St = DateTime.Parse(startDate),
+                        En = DateTime.Parse(endDate),
                     };
                 }
             }
             else
             {
                 var errorResponse = await response.Content.ReadAsStringAsync();
-                // Handle error response
             }
             return new ProjectCreationResult
             {
@@ -588,7 +614,7 @@ namespace MWDataMigrationApp
 
                     if (parentTask.ActualStartDate == null || parentTask.ActualEndDate == null)
                     {
-                        dateFallbackRecords.Add($"Project ID: {projectId}, Parent Task: {parentTask.Name}, StartDate: {startDate}, FinishDate: {finishDate}");
+                        dateFallbackRecords.Add($"Project ID: {projectId}, Task: {parentTask.Name}, Issue ID: {parentTask.IssueId}, StartDate: {startDate}, FinishDate: {finishDate}");
                     }
 
                     var mappedType = parentTask.Type != null && TypeMapping.ContainsKey(parentTask.Type.TrimEnd()) ? TypeMapping[parentTask.Type.TrimEnd()] : null;
@@ -605,7 +631,7 @@ namespace MWDataMigrationApp
 
                     if (assignedTo == defaultUserId)
                     {
-                        failedRecords.Add($"Project ID: {projectId}, Parent Task: {parentTask.Name}");
+                        failedRecords.Add($"Project ID: {projectId},  Task: {parentTask.Name}, Issue ID: {parentTask.IssueId} , AssignedTo: Added default user.");
                     }
 
                     TasksList.Add(new Data.TargetModels.Task
@@ -623,15 +649,21 @@ namespace MWDataMigrationApp
                         Status = "",
                         Progress = progress,
                         TaskType = "Task",
+                        CreatedAt = DateTime.UtcNow,
+                        CreatedBy = defaultUserId,
                         PropertiesValues = new List<PropertiesValue>
-                {
-                new()
-                {
-                    Id = 0,
-                    PropertyId=propertyId,
-                    Value = mappedType,
-                }
-                },
+                        {
+                            new()
+                            {
+                                PropertyId=propertyId,
+                                Value = mappedType,
+                            },
+                            new()
+                            {
+                                PropertyId=26,
+                                Value = mappedType,
+                            },
+                        },
                     });
 
                 }
@@ -662,156 +694,137 @@ namespace MWDataMigrationApp
             await System.IO.File.WriteAllLinesAsync(filePath, records);
         }
 
-        private async System.Threading.Tasks.Task PostMilestoneAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate,
-    Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
+        private async System.Threading.Tasks.Task<List<Data.TargetModels.Milestone>> PostMilestoneAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate,
+            Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
-            var milestones = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10006 && x.ProjectId == mtProjectId).Select(i => new
+            try
             {
-                i.IssueId,
-                Name = i.Summary,
-                Details = i.Description,
-                ActualStartDate = i.ActualStartDate,
-                PlannedStartDate = i.PlannedStartDate,
-                ActualEndDate = i.ActualEndDate,
-                PlannedEndDate = i.PlannedEndDate,
-                AssignedToAccountId = i.CurrentAssigneeAccountId,
-                Type = i.Type10074,
-                i.IssueStatusName,
-                Status = ""
-            }).ToList();
-
-            var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
-
-            var milestonePropsSection = _configuration.GetSection("MilestoneProperties:Type");
-
-            int propertyId = milestonePropsSection.GetValue<int>("PropertyId");
-            string key = milestonePropsSection.GetValue<string>("Key");
-            string viewType = milestonePropsSection.GetValue<string>("ViewType");
-
-            var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
-
-            // Load existing records from files
-            var successRecords = new List<string>(await LoadRecordsAsync("milestonesSuccessRecords.txt"));
-            var failedRecords = new List<string>(await LoadRecordsAsync("milestonesFailedRecords.txt"));
-            var dateFallbackRecords = new List<string>(await LoadRecordsAsync("milestonesDateFallbackRecords.txt"));
-
-            foreach (var milestone in milestones)
-            {
-                var startDate = milestone.ActualStartDate ?? milestone.PlannedStartDate ?? projectStartDate;
-                var finishDate = milestone.ActualEndDate ?? milestone.PlannedEndDate ?? projectFinishDate;
-
-                if (milestone.ActualStartDate == null || milestone.ActualEndDate == null)
+                var milestones = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10006 && x.ProjectId == mtProjectId).Select(i => new
                 {
-                    dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, StartDate: {startDate}, FinishDate: {finishDate}");
+                    i.IssueId,
+                    Name = i.Summary,
+                    Details = i.Description,
+                    ActualStartDate = i.ActualStartDate,
+                    PlannedStartDate = i.PlannedStartDate,
+                    ActualEndDate = i.ActualEndDate,
+                    PlannedEndDate = i.PlannedEndDate,
+                    AssignedToAccountId = i.CurrentAssigneeAccountId,
+                    Type = i.Type10074,
+                    i.IssueStatusName,
+                    Status = ""
+                }).ToList();
+
+                var userEmailToIdMap = users.ToDictionary(u => u.Email, u => u.UserId);
+
+                var milestonePropsSection = _configuration.GetSection("MilestoneProperties:Type");
+
+                var MilestonesList = new List<Data.TargetModels.Milestone>();
+                int propertyId = milestonePropsSection.GetValue<int>("PropertyId");
+                string key = milestonePropsSection.GetValue<string>("Key");
+                string viewType = milestonePropsSection.GetValue<string>("ViewType");
+
+                var defaultUserId = _configuration.GetValue<string>("DefaultUserId");
+
+                // Load existing records from files
+                var successRecords = new List<string>(await LoadRecordsAsync("milestonesSuccessRecords.txt"));
+                var failedRecords = new List<string>(await LoadRecordsAsync("milestonesFailedRecords.txt"));
+                var dateFallbackRecords = new List<string>(await LoadRecordsAsync("milestonesDateFallbackRecords.txt"));
+
+                foreach (var milestone in milestones)
+                {
+                    var startDate = milestone.ActualStartDate ?? milestone.PlannedStartDate ?? projectStartDate;
+                    var finishDate = milestone.ActualEndDate ?? milestone.PlannedEndDate ?? projectFinishDate;
+
+                    if (milestone.ActualStartDate == null || milestone.ActualEndDate == null)
+                    {
+                        dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, StartDate: {startDate}, FinishDate: {finishDate}");
+                    }
+
+                    var mappedType = milestone.Type != null && TypeMapping.ContainsKey(milestone.Type.TrimEnd()) ? TypeMapping[milestone.Type.TrimEnd()] : null;
+
+                    var progress = StatusProgressMapping.ContainsKey(milestone.IssueStatusName.TrimEnd()) ? StatusProgressMapping[milestone.IssueStatusName.TrimEnd()] : 0;
+
+                    var assignedToEmail = milestone.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(milestone.AssignedToAccountId)
+                        ? accountIdToEmailMap[milestone.AssignedToAccountId]
+                        : null;
+
+                    var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
+                        ? userEmailToIdMap[assignedToEmail]
+                        : defaultUserId;
+
+                    if (assignedTo == defaultUserId)
+                    {
+                        dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, Issue ID: {milestone.IssueId} , AssignedTo: Added default user.");
+                    }
+
+                    var destination = new Milestone()
+                    {
+                        Task = new Data.TargetModels.Task()
+                        {
+                            CreatedAt = DateTime.UtcNow,
+                            CreatedBy = defaultUserId,
+                            Title = milestone.Name,
+                            ActualStartDate = startDate.DateTime,
+                            StartDate = startDate.DateTime,
+                            FinishDate = finishDate.DateTime,
+                            Guid = Guid.NewGuid().ToString(),
+                            LevelId = projectId,
+                            LogId = 1,
+                            TaskType = "Milestone",
+                            PropertiesValues = new List<PropertiesValue>
+                        {
+                            new()
+                            {
+                                Id = 0,
+                                PropertyId=_configuration.GetSection("TaskProperties:Type").GetValue<int>("PropertyId"),
+                                Value = mappedType,
+                            }
+                        },
+                        },
+                        Attachments = "[]",
+                        CompletionPercentage = progress,
+                        Weight = 0.00001,
+                        PlannedFinishDate = finishDate.DateTime,
+                        PlannedStartDate = startDate.DateTime,
+                        LevelId = projectId,
+                        Name = milestone.Name,
+                        CreatedAt = DateTime.UtcNow,
+                        CreatedBy = defaultUserId,
+                        LogId = 3,
+                        PropertiesValues = new List<PropertiesValue>
+                        {
+                            new()
+                            {
+                                Id = 0,
+                                PropertyId=propertyId,
+                                Value = mappedType,
+                            },
+                            new()
+                            {
+                                PropertyId = 28
+                            }
+                        },
+                    };
+
+                    MilestonesList.Add(destination);
                 }
 
-                var mappedType = milestone.Type != null && TypeMapping.ContainsKey(milestone.Type.TrimEnd()) ? TypeMapping[milestone.Type.TrimEnd()] : null;
+                await SaveRecordsAsync("milestonesSuccessRecords.txt", successRecords);
+                await SaveRecordsAsync("milestonesFailedRecords.txt", failedRecords);
+                await SaveRecordsAsync("milestonesDateFallbackRecords.txt", dateFallbackRecords);
 
-                var progress = StatusProgressMapping.ContainsKey(milestone.IssueStatusName.TrimEnd()) ? StatusProgressMapping[milestone.IssueStatusName.TrimEnd()] : 0;
-
-                var assignedToEmail = milestone.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(milestone.AssignedToAccountId)
-                    ? accountIdToEmailMap[milestone.AssignedToAccountId]
-                    : null;
-
-                var assignedTo = assignedToEmail != null && userEmailToIdMap.ContainsKey(assignedToEmail)
-                    ? userEmailToIdMap[assignedToEmail]
-                    : defaultUserId;
-
-                if (assignedTo == defaultUserId)
-                {
-                    dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, AssignedTo: Added default user.");
-                }
-
-                var requestBody = new
-                {
-                    name = milestone.Name,
-                    plannedStartDate = startDate.ToString("yyyy-MM-dd"),
-                    plannedFinishDate = finishDate.ToString("yyyy-MM-dd"),
-                    weight = 0.00001,
-                    status = milestone.Status,
-                    attachments = new List<object>(),
-                    props = new List<object>
-            {
-                new
-                {
-                    id = 0,
-                    propertyId,
-                    key,
-                    value = mappedType,
-                    viewType,
-                }
+                return MilestonesList;
             }
-                };
-
-                var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/Milestones", requestBody);
-
-                int retryCount = 3;
-                int currentRetry = 0;
-
-                while (currentRetry < retryCount)
-                {
-                    try
-                    {
-                        if (!response.IsSuccessStatusCode)
-                        {
-                            var errorResponse = await response.Content.ReadAsStringAsync();
-                            failedRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, IssueId: {milestone.IssueId}, Error: {errorResponse}");
-                            break;
-                        }
-                        else
-                        {
-                            var responseContent = await response.Content.ReadAsStringAsync();
-                            var data = JsonDocument.Parse(responseContent).RootElement.GetProperty("data");
-                            var taskId = data.GetProperty("taskId").GetInt32();
-                            successRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}");
-
-                            await System.Threading.Tasks.Task.Delay(2000);
-
-                            var task = await _targetContext.Tasks.FirstOrDefaultAsync(x => x.Id == taskId);
-
-                            task.AssignedTo = assignedTo;
-                            task.Details = milestone.Details;
-                            task.Progress = progress;
-                            //task.PropertiesValues.Add(new PropertiesValue
-                            //{
-                            //    PropertyId = _configuration.GetSection("TaskProperties:Type").GetValue<int>("PropertyId"),
-                            //    Value = mappedType,
-                            //    Task = task.Id
-                            //});
-
-                            await _targetContext.SaveChangesAsync();
-                            break;
-                        }
-                    }
-                    catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx && sqlEx.Number == -2)
-                    {
-                        currentRetry++;
-                        if (currentRetry >= retryCount)
-                        {
-                            failedRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, IssueId: {milestone.IssueId}, Error: Execution Timeout after {retryCount} retries.");
-                        }
-                        else
-                        {
-                            await System.Threading.Tasks.Task.Delay(1000 * currentRetry);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        failedRecords.Add($"Project ID: {projectId}, Milestone: {milestone.Name}, IssueId: {milestone.IssueId}, Error: {ex.Message}");
-                        break;
-                    }
-                }
-                await System.Threading.Tasks.Task.Delay(2000);
+            catch (Exception ex)
+            {
             }
-
-            await SaveRecordsAsync("milestonesSuccessRecords.txt", successRecords);
-            await SaveRecordsAsync("milestonesFailedRecords.txt", failedRecords);
-            await SaveRecordsAsync("milestonesDateFallbackRecords.txt", dateFallbackRecords);
+            return new List<Milestone>();
         }
 
-        private async System.Threading.Tasks.Task<List<DeliverableInfo>> PostDeliverableAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
+        private async System.Threading.Tasks.Task<List<Deliverable>> PostDeliverableAsync(long mtProjectId, int projectId, DateTime projectStartDate, DateTime projectFinishDate,
+    Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
-            List<DeliverableInfo> deliverableDetails = new List<DeliverableInfo>();
+            List<Deliverable> deliverableDetails = new List<Deliverable>();
 
             var deliverables = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10000 && x.ProjectId == mtProjectId).Select(i => new
             {
@@ -873,115 +886,67 @@ namespace MWDataMigrationApp
 
                 if (assignedTo == defaultUserId)
                 {
-                    dateFallbackRecords.Add($"Project ID: {projectId}, Milestone: {deliverable.Title}, Deliverable ID: {deliverable.MtDeliverablId}, AssignedTo: Added default user.");
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, Deliverable ID: {deliverable.MtDeliverablId}, AssignedTo: Added default user.");
                 }
 
-                var requestBody = new
+                var deliverableEntity = new Deliverable()
                 {
-                    title = deliverable.Title,
-                    plannedStartDate = plannedStartDate.ToString("yyyy-MM-dd"),
-                    plannedFinishDate = plannedFinishDate.ToString("yyyy-MM-dd"),
-                    actualFinishDate = actualFinishDate.ToString("yyyy-MM-dd"),
-                    status = deliverable.Status,
-                    completionPercentage = progress,
-                    attachments = new List<object>(),
-                    props = new List<object>
-            {
-                new
-                {
-                    id = 0,
-                    propertyId,
-                    key,
-                    value = mappedType,
-                    viewType,
-                }
-            }
+                    CreatedAt = DateTime.UtcNow,
+                    CreatedBy = defaultUserId,
+                    UpdatedAt = DateTime.UtcNow,
+                    UpdatedBy = defaultUserId,
+                    Attachments = "[]",
+                    LevelId = projectId,
+                    CompletionPercentage = progress,
+                    LogId = 2,
+                    PropertiesValues = new List<PropertiesValue>
+                    {
+                        new PropertiesValue
+                        {
+                            PropertyId = propertyId,
+                            Value = mappedType
+                        },
+                        new PropertiesValue
+                        {
+                            PropertyId = 27 
+                        }
+                    },
+                    PlannedStartDate = plannedStartDate.DateTime,
+                    PlannedFinishDate = plannedStartDate.DateTime,
+                    Title = deliverable.Title,
+                    Task = new Data.TargetModels.Task
+                    {
+                        CreatedAt = DateTime.UtcNow,
+                        CreatedBy = defaultUserId,
+                        UpdatedAt = DateTime.UtcNow,
+                        UpdatedBy = defaultUserId,
+                        StartDate = plannedStartDate.DateTime,
+                        FinishDate = plannedFinishDate.DateTime,
+                        Title = deliverable.Title,
+                        Guid = Guid.NewGuid().ToString(),
+                        LevelId = projectId,
+                        LogId = 1, 
+                        TaskType = "Deliverable"
+                    },
+                    MtDeliverablId = deliverable.MtDeliverablId.Value,
+                    EarnedValue = deliverable.EarnedValue,
+                    PaymentPlanStatus = deliverable.PaymentPlanStatus,
+                    Amount = deliverable.Amount,
+                    InvoiceNumber = deliverable.InvoiceNumber,
                 };
 
-                var response = await _httpClient.PostAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/Deliverables", requestBody);
-
-                int retryCount = 3;
-                int currentRetry = 0;
-
-                while (currentRetry < retryCount)
-                {
-                    try
-                    {
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var responseContent = await response.Content.ReadAsStringAsync();
-                            using var jsonDoc = JsonDocument.Parse(responseContent);
-                            var root = jsonDoc.RootElement;
-
-                            if (root.TryGetProperty("data", out JsonElement dataElement))
-                            {
-                                successRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}");
-                                deliverableDetails.Add(new DeliverableInfo
-                                {
-                                    MtDeliverablId = deliverable.MtDeliverablId.Value,
-                                    Id = dataElement.GetProperty("id").GetInt32(),
-                                    Title = dataElement.GetProperty("title").GetString(),
-                                    PlannedFinishDate = DateTime.Parse(plannedFinishDate.ToString("yyyy-MM-dd")),
-                                    EarnedValue = deliverable.EarnedValue,
-                                    PaymentPlanStatus = deliverable.PaymentPlanStatus,
-                                    Amount = deliverable.Amount,
-                                    InvoiceNumber = deliverable.InvoiceNumber,
-                                });
-
-                                var taskId = dataElement.GetProperty("taskId").GetInt32();
-
-                                await System.Threading.Tasks.Task.Delay(2000);
-
-                                var task = await _targetContext.Tasks.FirstOrDefaultAsync(x => x.Id == taskId);
-                                task.AssignedTo = assignedTo;
-                                task.Details = deliverable.Details;
-                                task.Progress = progress;
-                                //task.PropertiesValues.Add(new PropertiesValue
-                                //{
-                                //    PropertyId = _configuration.GetSection("TaskProperties:Type").GetValue<int>("PropertyId"),
-                                //    Value = mappedType,
-                                //    Task = task.Id
-                                //});
-                                await _targetContext.SaveChangesAsync();
-                            }
-                            break;
-                        }
-                        else
-                        {
-                            var errorResponse = await response.Content.ReadAsStringAsync();
-                            failedRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, IssueId: {deliverable.MtDeliverablId}, Error: {errorResponse}");
-                            break;
-                        }
-                    }
-                    catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx && sqlEx.Number == -2)
-                    {
-                        currentRetry++;
-                        if (currentRetry >= retryCount)
-                        {
-                            failedRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, IssueId: {deliverable.MtDeliverablId}, Error: Execution Timeout after {retryCount} retries.");
-                        }
-                        else
-                        {
-                            await System.Threading.Tasks.Task.Delay(1000 * currentRetry); // Exponential backoff
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        failedRecords.Add($"Project ID: {projectId}, Deliverable: {deliverable.Title}, IssueId: {deliverable.MtDeliverablId}, Error: {ex.Message}");
-                        break; // No need to retry on other exceptions
-                    }
-                }
-                await System.Threading.Tasks.Task.Delay(2000);
+                deliverableDetails.Add(deliverableEntity);
             }
 
             await SaveRecordsAsync("deliverablesSuccessRecords.txt", successRecords);
             await SaveRecordsAsync("deliverablesFailedRecords.txt", failedRecords);
             await SaveRecordsAsync("deliverablesDateFallbackRecords.txt", dateFallbackRecords);
 
+            await _targetContext.Deliverables.AddRangeAsync(deliverableDetails);
+            await _targetContext.SaveChangesAsync();
             return deliverableDetails;
         }
-
-        private async System.Threading.Tasks.Task PostRiskAsync(long mtProjectId, int projectId, List<DeliverableInfo> deliverableInfos, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
+        private async System.Threading.Tasks.Task PostRiskAsync(long mtProjectId, int projectId, List<Deliverable> deliverableInfos, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             var risks = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10078 && x.ProjectId == mtProjectId).Select(i => new
             {
@@ -1086,7 +1051,7 @@ namespace MWDataMigrationApp
             await System.IO.File.WriteAllLinesAsync("risksDateFallbackRecords.txt", dateFallbackRecords);
         }
 
-        private async System.Threading.Tasks.Task PostIssueAsync(long mtProjectId, int projectId, List<DeliverableInfo> deliverableInfos, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
+        private async System.Threading.Tasks.Task PostIssueAsync(long mtProjectId, int projectId, List<Deliverable> deliverableInfos, DateTime projectFinishDate, Dictionary<string, string> accountIdToEmailMap, List<UserInfo> users)
         {
             var issues = _sourceContext.IssuesMts.Where(x => x.IssueTypeId == 10009 && x.ProjectId == mtProjectId).Select(i => new
             {
@@ -1122,7 +1087,7 @@ namespace MWDataMigrationApp
 
                 if (issue.DueDate == null)
                 {
-                    dateFallbackRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}, Issue ID: {issue.IssueId}, DueDate: {dueDate}");
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Issue: {issue.Title}, Issue ID: {issue.IssueId}, DueDate: {dueDate}");
                 }
 
                 var assignedToEmail = issue.AssignedToAccountId != null && accountIdToEmailMap.ContainsKey(issue.AssignedToAccountId)
@@ -1135,23 +1100,23 @@ namespace MWDataMigrationApp
 
                 if (assignedTo == defaultUserId)
                 {
-                    dateFallbackRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}, Issue ID: {issue.IssueId}, AssignedTo: Added default user.");
+                    dateFallbackRecords.Add($"Project ID: {projectId}, Issue: {issue.Title}, Issue ID: {issue.IssueId}, AssignedTo: Added default user.");
                 }
 
                 var relatedDeliverable = deliverableInfos.FirstOrDefault(x => x.MtDeliverablId == issue.ParentIssueId);
 
                 var props = relatedDeliverable != null ? new List<object>
-        {
-            new
-            {
-                id = 0,
-                propertyId,
-                key,
-                value = relatedDeliverable.Id.ToString(),
-                viewType = valueType,
-                label
-            }
-        } : new List<object>();
+                {
+                    new
+                    {
+                        id = 0,
+                        propertyId,
+                        key,
+                        value = relatedDeliverable.Id.ToString(),
+                        viewType = valueType,
+                        label
+                    }
+                } : new List<object>();
 
                 var requestBody = new
                 {
@@ -1171,11 +1136,11 @@ namespace MWDataMigrationApp
                 if (!response.IsSuccessStatusCode)
                 {
                     var errorResponse = await response.Content.ReadAsStringAsync();
-                    failedRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}, Issue ID: {issue.IssueId}, Error: {errorResponse}");
+                    failedRecords.Add($"Project ID: {projectId}, Issue: {issue.Title}, Issue ID: {issue.IssueId}, Error: {errorResponse}");
                 }
                 else
                 {
-                    successRecords.Add($"Project ID: {projectId}, Risk: {issue.Title}");
+                    successRecords.Add($"Project ID: {projectId}, Issue: {issue.Title}");
                 }
 
                 await System.Threading.Tasks.Task.Delay(2000);
@@ -1212,7 +1177,7 @@ namespace MWDataMigrationApp
             }
         }
 
-        public async System.Threading.Tasks.Task ProcessDeliverablesAsync(int projectId, List<DeliverableInfo> deliverables, string token)
+        public async System.Threading.Tasks.Task ProcessDeliverablesAsync(int projectId, List<Deliverable> deliverables, string token)
         {
             var paymentPlanId = await FetchPaymentPlanIdAsync(projectId, token);
 
@@ -1263,7 +1228,7 @@ namespace MWDataMigrationApp
         }
 
 
-        private async System.Threading.Tasks.Task CreateBoqAsync(int projectId, DeliverableInfo deliverable)
+        private async System.Threading.Tasks.Task CreateBoqAsync(int projectId, Deliverable deliverable)
         {
             if (!deliverable.Amount.HasValue)
             {
@@ -1282,7 +1247,7 @@ namespace MWDataMigrationApp
             if (!response.IsSuccessStatusCode)
             {
                 var errorResponse = await response.Content.ReadAsStringAsync();
-                throw new Exception($"Failed to create BOQ: {errorResponse}");
+                
             }
 
             var responseContent = await response.Content.ReadAsStringAsync();
@@ -1290,7 +1255,7 @@ namespace MWDataMigrationApp
             deliverable.BoqId = boq.GetProperty("id").GetInt32();
         }
 
-        private async System.Threading.Tasks.Task CreatePaymentPlanItemAsync(int projectId, int paymentPlanId, DeliverableInfo deliverable)
+        private async System.Threading.Tasks.Task CreatePaymentPlanItemAsync(int projectId, int paymentPlanId, Deliverable deliverable)
         {
             var requestBody = new
             {
@@ -1306,7 +1271,6 @@ namespace MWDataMigrationApp
             if (!response.IsSuccessStatusCode)
             {
                 var errorResponse = await response.Content.ReadAsStringAsync();
-                throw new Exception($"Failed to create Payment Plan Item: {errorResponse}");
             }
         }
 
@@ -1366,7 +1330,7 @@ namespace MWDataMigrationApp
             }
         }
 
-        private async System.Threading.Tasks.Task CreateInvoiceAsync(int projectId, DeliverableInfo deliverable, int paymentPlanItemId)
+        private async System.Threading.Tasks.Task CreateInvoiceAsync(int projectId, Deliverable deliverable, int paymentPlanItemId)
         {
             var requestBody = new
             {
@@ -1389,7 +1353,7 @@ namespace MWDataMigrationApp
             deliverable.InvoiceId = invoice.GetProperty("id").GetInt32();
         }
 
-        private async System.Threading.Tasks.Task SubmitInvoiceAsync(int projectId, DeliverableInfo deliverable)
+        private async System.Threading.Tasks.Task SubmitInvoiceAsync(int projectId, Deliverable deliverable)
         {
             var response = await _httpClient.PutAsJsonAsync($"{_configuration["ApiEndpoints:PostProject"]}/{projectId}/PaymentPlan/Invoices/Submit/{deliverable.InvoiceId}", new { });
 

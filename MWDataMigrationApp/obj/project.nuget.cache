@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "HjtGE9ZLdKOlnLnPmyqqwYFKNg87rXo5P8CxH27WrL0laZD5ZDl73aZspjsJUuiIJPXmAOZfSrLPDjkRSt1Jxg==",
+  "dgSpecHash": "6yx+7enGJHrE8nZ5iL8YkWQLjWZegZLTk8H39HMPbBEHupyqizAlQGSxW92D9IKG1eobZ9Nc3oH2cEWMPZ39EQ==",
   "success": true,
-  "projectFilePath": "C:\\Users\\Lenovo\\Source\\Repos\\mw-migration-tool\\MWDataMigrationApp\\MWDataMigrationApp.csproj",
+  "projectFilePath": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\MWDataMigrationApp.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Lenovo\\.nuget\\packages\\humanizer.core\\2.8.26\\humanizer.core.2.8.26.nupkg.sha512",
     "C:\\Users\\Lenovo\\.nuget\\packages\\microsoft.csharp\\4.5.0\\microsoft.csharp.4.5.0.nupkg.sha512",

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace MWDataMigrationApp.Data.TargetModels
 {
@@ -40,5 +41,23 @@ namespace MWDataMigrationApp.Data.TargetModels
 
         public virtual ICollection<Expense> Expenses { get; set; }
         public virtual ICollection<PaymentPlanItem> PaymentPlanItems { get; set; }
+
+
+        [NotMapped]
+        public long MtDeliverablId { get; set; }
+        [NotMapped]
+        public double? EarnedValue { get; set; }
+        [NotMapped]
+        public string PaymentPlanStatus { get; set; }
+        [NotMapped]
+        public double? Amount { get; set; }
+        [NotMapped]
+        public string InvoiceNumber { get; set; }
+        [NotMapped]
+        public int BoqId { get; set; }
+        [NotMapped]
+        public int PaymentPlanItemId { get; set; }
+        [NotMapped]
+        public int InvoiceId { get; set; }
     }
 }

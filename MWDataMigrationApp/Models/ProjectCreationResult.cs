@@ -10,6 +10,8 @@ namespace MWDataMigrationApp.Models
     {
         public int ProjectId { get; set; }
         public long MtProjectId { get; set; }
+        public DateTime St { get; set; }
+        public DateTime En { get; set; }
         public bool DefaultStartDateAdded { get; set; }
         public bool DefaultEndDateAdded { get; set; }
         public bool DefaultManagerAdded { get; set; }

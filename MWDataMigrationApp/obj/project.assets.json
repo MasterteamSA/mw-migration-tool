@@ -3083,11 +3083,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Lenovo\\Source\\Repos\\mw-migration-tool\\MWDataMigrationApp\\MWDataMigrationApp.csproj",
+      "projectUniqueName": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\MWDataMigrationApp.csproj",
       "projectName": "MWDataMigrationApp",
-      "projectPath": "C:\\Users\\Lenovo\\Source\\Repos\\mw-migration-tool\\MWDataMigrationApp\\MWDataMigrationApp.csproj",
+      "projectPath": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\MWDataMigrationApp.csproj",
       "packagesPath": "C:\\Users\\Lenovo\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Lenovo\\Source\\Repos\\mw-migration-tool\\MWDataMigrationApp\\obj\\",
+      "outputPath": "C:\\Users\\Lenovo\\source\\repos\\MWDataMigrationApp\\MWDataMigrationApp\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\Lenovo\\AppData\\Roaming\\NuGet\\NuGet.Config",
@@ -3178,7 +3178,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.300\\RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.205\\RuntimeIdentifierGraph.json"
       }
     }
   }

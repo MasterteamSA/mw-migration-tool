@@ -8,6 +8,6 @@ build_property.PlatformNeutralAssembly =
 build_property.EnforceExtendedAnalyzerRules = 
 build_property._SupportedPlatformList = Linux,macOS,Windows
 build_property.RootNamespace = MWDataMigrationApp
-build_property.ProjectDir = C:\Users\Lenovo\source\repos\MWDataMigrationApp\MWDataMigrationApp\
+build_property.ProjectDir = C:\Users\Lenovo\Source\Repos\mw-migration-tool\MWDataMigrationApp\
 build_property.EnableComHosting = 
 build_property.EnableGeneratedComInterfaceComImportInterop = 

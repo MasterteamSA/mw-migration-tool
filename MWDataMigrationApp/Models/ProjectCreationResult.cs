@@ -9,6 +9,7 @@ namespace MWDataMigrationApp.Models
     public class ProjectCreationResult
     {
         public int ProjectId { get; set; }
+        public long MtProjectId { get; set; }
         public bool DefaultStartDateAdded { get; set; }
         public bool DefaultEndDateAdded { get; set; }
         public bool DefaultManagerAdded { get; set; }
